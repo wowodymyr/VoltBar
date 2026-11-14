@@ -16,6 +16,8 @@ func usage() -> Never {
                                               apply voltage offsets (mV) temporarily
       voltbarctl turbo <0|1>                  disable/enable Turbo Boost temporarily
       voltbarctl power <PL1> <PL2>            set power limits (W) temporarily
+      voltbarctl fans                         fans, sensors and fan control state
+      voltbarctl fans off                     hand all fans back to the system
       voltbarctl save                         save current temporary settings as the profile
       voltbarctl reset                        restore factory values and disable the profile
       sudo voltbarctl read <0xMSR>            read an MSR
@@ -123,6 +125,27 @@ case "power":
     b.pl2 = p2
     let r = call(Request(cmd: "apply", settings: b))
     if let s = r.status { printInfo(s) }
+
+case "fans":
+    if rest.first == "off" {
+        var fc = status().fanConfig ?? FanConfig()
+        fc.enabled = false
+        let r = call(Request(cmd: "fans", fanConfig: fc))
+        if r.ok { print("Fan control off — the system controls the fans.") }
+        break
+    }
+    let s = status()
+    guard let fans = s.fans, !fans.isEmpty else { print("No fans reported by the SMC"); break }
+    let fc = s.fanConfig ?? FanConfig()
+    print("Fan control:    \(fc.enabled ? "on" : "off")")
+    for f in fans {
+        let set = f.index < fc.fans.count ? fc.fans[f.index] : FanSetting()
+        print("  \(f.name.padding(toLength: 16, withPad: " ", startingAt: 0)) \(Int(f.rpm)) rpm  (\(Int(f.minRPM))–\(Int(f.maxRPM)))  "
+              + (fc.enabled ? set.mode.rawValue + (set.mode == .fixed ? " · \(Int(set.fixedRPM)) rpm" : set.mode == .auto ? "" : " · \(set.sensor)") : "system"))
+    }
+    print("Sensors:")
+    for x in s.sensors ?? [] { print("  \(x.name.padding(toLength: 26, withPad: " ", startingAt: 0)) \(x.value.map { String(format: "%.1f °C", $0) } ?? "—")") }
+    if let m = s.fanMessage { print("Note:           \(m)") }
 
 case "save":
     let s = status()

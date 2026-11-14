@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
     private var settingsWindow: NSWindow?
+    private var tabController: NSTabViewController?
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -30,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
-        let root = CompactMenuView(openSettings: { [weak self] in self?.showSettings() })
+        let root = CompactMenuView(openSettings: { [weak self] tab in self?.showSettings(tab) })
             .environmentObject(model)
         let hosting = NSHostingController(rootView: root)
         if #available(macOS 13.0, *) { hosting.sizingOptions = [.preferredContentSize] }
@@ -68,16 +69,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             let size = view.fittingSize
             if size != popover.contentSize { popover.contentSize = size }
         }
-        if let w = settingsWindow, w.isVisible, let view = w.contentViewController?.view {
-            view.layoutSubtreeIfNeeded()
-            let size = view.fittingSize
-            let current = w.contentRect(forFrameRect: w.frame).size
-            if size != current {
-                // Keep the top edge in place while the height changes.
-                var frame = w.frameRect(forContentRect: NSRect(origin: .zero, size: size))
-                frame.origin = NSPoint(x: w.frame.minX, y: w.frame.maxY - frame.height)
-                w.setFrame(frame, display: true)
-            }
+        if let w = settingsWindow, w.isVisible, let tc = tabController,
+           tc.selectedTabViewItemIndex >= 0, let vc = tc.tabViewItems[tc.selectedTabViewItemIndex].viewController {
+            vc.view.layoutSubtreeIfNeeded()
+            let size = vc.view.fittingSize
+            if size != vc.preferredContentSize { vc.preferredContentSize = size }
         }
     }
 
@@ -142,19 +138,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
     // MARK: Settings window
 
-    private func showSettings() {
+    private func showSettings(_ tab: SettingsTab = .undervolting) {
         popover.performClose(nil)
         if settingsWindow == nil {
-            let hosting = NSHostingController(rootView: SettingsWindowView().environmentObject(model))
-            if #available(macOS 13.0, *) { hosting.sizingOptions = [.preferredContentSize] }
-            let w = NSWindow(contentViewController: hosting)
-            w.title = "VoltBar Settings"
+            let tc = NSTabViewController()
+            tc.tabStyle = .toolbar
+            for t in SettingsTab.allCases {
+                let content: AnyView
+                switch t {
+                case .undervolting: content = AnyView(UndervoltSettingsView())
+                case .fans: content = AnyView(FansSettingsView(live: model.live))
+                case .general: content = AnyView(GeneralSettingsView())
+                }
+                let h = NSHostingController(rootView: AnyView(content.environmentObject(model)))
+                h.title = t.title
+                if #available(macOS 13.0, *) {
+                    h.sizingOptions = [.preferredContentSize]
+                } else {
+                    h.view.layoutSubtreeIfNeeded()
+                    h.preferredContentSize = h.view.fittingSize
+                }
+                let item = NSTabViewItem(viewController: h)
+                item.label = t.title
+                item.image = NSImage(systemSymbolName: t.symbol, accessibilityDescription: t.title)
+                tc.addTabViewItem(item)
+            }
+            let w = NSWindow(contentViewController: tc)
             w.styleMask = [.titled, .closable, .miniaturizable]
+            w.toolbarStyle = .preference
             w.isReleasedWhenClosed = false
             w.delegate = self
-            w.center()
+            tabController = tc
             settingsWindow = w
         }
+        tabController?.selectedTabViewItemIndex = tab.rawValue
+        if let w = settingsWindow, !w.isVisible { w.center() }
         model.windowVisible = true
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)

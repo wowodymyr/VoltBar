@@ -69,11 +69,16 @@ var rootPowerPort: io_connect_t = 0
 
 let powerCallback: IOServiceInterestCallback = { _, _, messageType, messageArgument in
     switch messageType {
-    case kMsgCanSystemSleep, kMsgSystemWillSleep:
+    case kMsgCanSystemSleep:
+        IOAllowPowerChange(rootPowerPort, Int(bitPattern: messageArgument))
+    case kMsgSystemWillSleep:
+        // Give the fans back to the system for sleep; the control loop takes over again after wake.
+        core.q.sync { core.fans.suspended = true; core.fans.releaseAll() }
         IOAllowPowerChange(rootPowerPort, Int(bitPattern: messageArgument))
     case kMsgSystemHasPoweredOn:
         // После выхода из сна/гибернации значения OC Mailbox сбрасываются — применяем заново
         // (дважды: сразу и с задержкой, на случай если прошивка ещё «досыпает»).
+        core.q.async { core.fans.suspended = false }
         core.q.asyncAfter(deadline: .now() + 2) { core.onWake() }
         core.q.asyncAfter(deadline: .now() + 15) { core.enforce(reason: "after wake") }
     default:

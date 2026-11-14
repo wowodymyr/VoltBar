@@ -49,12 +49,6 @@ struct HeaderView: View {
                 Image(systemName: "bolt.fill").foregroundColor(.yellow)
                 Text("VoltBar").font(.headline)
                 Spacer()
-                if let s = model.status {
-                    Text(s.enforcing ? "Profile active" : "Profile off")
-                        .font(.callout)
-                        .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background(Capsule().fill(s.enforcing ? Color.green.opacity(0.3) : Color.primary.opacity(0.1)))
-                }
             }
             let cpu = [model.cpuModel, model.macModel].filter { !$0.isEmpty }.joined(separator: " · ")
             if !cpu.isEmpty {
@@ -308,38 +302,63 @@ struct ActionButtons: View {
     }
 }
 
+struct ProfileBadge: View {
+    let active: Bool
+    var body: some View {
+        Text(active ? "Profile active" : "Profile off")
+            .font(.callout)
+            .padding(.horizontal, 7).padding(.vertical, 2)
+            .background(Capsule().fill(active ? Color.green.opacity(0.3) : Color.primary.opacity(0.1)))
+    }
+}
+
 // MARK: - Compact popover (menu bar)
 
 struct CompactMenuView: View {
     @EnvironmentObject var model: AppModel
-    let openSettings: () -> Void
+    let openSettings: (SettingsTab) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HeaderView()
-            StatusGate { s in
-                VStack(alignment: .leading, spacing: 10) {
-                    MetricsView(live: model.live)
-                    StatusNotes(status: s)
-                    Divider()
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Voltage offset").font(.headline)
+            if model.connected { MetricsView(live: model.live) }
+            Divider()
+
+            // Undervolting
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label("Undervolting", systemImage: "bolt").font(.headline)
+                    Spacer()
+                    if let s = model.status, s.kextLoaded { ProfileBadge(active: s.enforcing) }
+                }
+                StatusGate { s in
+                    VStack(alignment: .leading, spacing: 8) {
+                        StatusNotes(status: s)
                         OffsetWarnings()
-                        OffsetRow(index: 0, current: s.offsets[0])
-                        OffsetRow(index: 1, current: s.offsets[1])
+                        VStack(alignment: .leading, spacing: 6) {
+                            OffsetRow(index: 0, current: s.offsets[0])
+                            OffsetRow(index: 1, current: s.offsets[1])
+                        }
+                        .disabled(!s.undervoltAvailable)
+                        TurboRow(status: s)
+                        ActionButtons()
                     }
-                    .disabled(!s.undervoltAvailable)
-                    Divider()
-                    TurboRow(status: s)
-                    Divider()
-                    ActionButtons()
                 }
             }
             Divider()
+
+            // Fans
+            if model.connected {
+                FansMenuSection(live: model.live, openFanSettings: { openSettings(.fans) })
+                Divider()
+            }
+
             HStack {
-                Button { openSettings() } label: { Label("All settings…", systemImage: "slider.horizontal.3") }
+                Button("Settings…") { openSettings(.undervolting) }
+                    .keyboardShortcut(",", modifiers: .command)
                 Spacer()
-                Button("Quit") { NSApp.terminate(nil) }
+                Button("Quit VoltBar") { NSApp.terminate(nil) }
+                    .keyboardShortcut("q", modifiers: .command)
             }
         }
         .padding(14)
@@ -347,47 +366,65 @@ struct CompactMenuView: View {
     }
 }
 
-// MARK: - Full settings window
+// MARK: - Settings window (tabs: Undervolting, Fans, General)
 
-struct SettingsWindowView: View {
+enum SettingsTab: Int, CaseIterable {
+    case undervolting, fans, general
+
+    var title: String {
+        switch self {
+        case .undervolting: return "Undervolting"
+        case .fans: return "Fans"
+        case .general: return "General"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .undervolting: return "bolt"
+        case .fans: return fanSymbolName
+        case .general: return "gearshape"
+        }
+    }
+}
+
+struct UndervoltSettingsView: View {
     @EnvironmentObject var model: AppModel
 
     private let column: CGFloat = 400
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HeaderView()
             StatusGate { s in
                 VStack(alignment: .leading, spacing: 12) {
-                    MetricsView(live: model.live)
+                    HStack(alignment: .top) {
+                        MetricsView(live: model.live).frame(width: column)
+                        Spacer()
+                        ProfileBadge(active: s.enforcing)
+                    }
                     StatusNotes(status: s)
                     Divider()
-                    // Two columns so the window fits a 900-pt-high screen.
                     HStack(alignment: .top, spacing: 20) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text("Voltage offset").font(.headline)
-                                    Spacer()
-                                    Toggle("Damage mode", isOn: Binding(get: { model.draft.damageMode },
-                                                                        set: { model.setDamageMode($0) }))
-                                        .toggleStyle(.checkbox)
-                                }
-                                OffsetWarnings()
-                                ForEach(0..<6, id: \.self) { i in
-                                    OffsetRow(index: i, current: s.offsets[i])
-                                }
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Voltage Offset").font(.headline)
+                                Spacer()
+                                Toggle("Damage mode", isOn: Binding(get: { model.draft.damageMode },
+                                                                    set: { model.setDamageMode($0) }))
+                                    .toggleStyle(.checkbox)
                             }
-                            .disabled(!s.undervoltAvailable)
-                            Divider()
-                            TurboRow(status: s)
+                            OffsetWarnings()
+                            ForEach(0..<6, id: \.self) { i in
+                                OffsetRow(index: i, current: s.offsets[i])
+                            }
                         }
+                        .disabled(!s.undervoltAvailable)
                         .frame(width: column)
                         Divider()
                         VStack(alignment: .leading, spacing: 12) {
-                            PowerSection(status: s)
+                            TurboRow(status: s)
                             Divider()
-                            MenuBarSection()
+                            PowerSection(status: s)
                         }
                         .frame(width: column)
                     }
@@ -395,31 +432,41 @@ struct SettingsWindowView: View {
                     ActionButtons()
                 }
             }
-            Divider()
-            HStack {
-                Toggle("Launch VoltBar at login", isOn: Binding(get: { model.launchAtLogin },
-                                                                set: { model.setLaunchAtLogin($0) }))
-                    .toggleStyle(.checkbox)
-                Spacer()
-                if let d = model.status?.driver {
-                    Text("Driver: \(d == VB.ownKextClass ? "VoltBarMSR (built-in)" : d)").font(.callout)
-                }
-            }
         }
-        .padding(18)
+        .padding(20)
         .fixedSize()
     }
 }
 
-struct MenuBarSection: View {
+struct GeneralSettingsView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Menu bar").font(.headline)
-            Toggle("Show CPU temperature in the menu bar", isOn: $model.menuBarShowTemp)
-            Toggle("Show CPU power in the menu bar", isOn: $model.menuBarShowPower)
+        VStack(alignment: .leading, spacing: 14) {
+            HeaderView()
+            Divider()
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Menu Bar").font(.headline)
+                Toggle("Show CPU temperature in the menu bar", isOn: $model.menuBarShowTemp)
+                Toggle("Show CPU power in the menu bar", isOn: $model.menuBarShowPower)
+            }
+            .toggleStyle(.checkbox)
+            Divider()
+            Toggle("Launch VoltBar at login", isOn: Binding(get: { model.launchAtLogin },
+                                                            set: { model.setLaunchAtLogin($0) }))
+                .toggleStyle(.checkbox)
+            Divider()
+            VStack(alignment: .leading, spacing: 4) {
+                Text("About").font(.headline)
+                Text("VoltBar \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")"
+                     + (model.status.map { " · daemon \($0.daemonVersion)" } ?? "")).font(.callout)
+                if let d = model.status?.driver {
+                    Text("MSR driver: \(d == VB.ownKextClass ? "VoltBarMSR (built-in)" : d)").font(.callout)
+                }
+            }
         }
-        .toggleStyle(.checkbox)
+        .padding(20)
+        .frame(width: 440, alignment: .leading)
+        .fixedSize()
     }
 }

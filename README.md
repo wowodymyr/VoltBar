@@ -28,6 +28,19 @@ It ships its own MSR driver (`VoltBarMSR.kext`) and rewrites all the user-space 
 
 Offsets are encoded exactly as the OC Mailbox specification defines them: in units of 1/1.024 mV. VoltageShift rounds to 1 mV, so for the same number, say −100, VoltBar sets a value about 2 % smaller in magnitude — which is exactly −100 mV.
 
+## Fan control
+
+Off by default; switch it on in the menu (**Fans**) or in **Settings → Fans**. Each fan gets its own mode:
+
+* **Automatic** — macOS controls the fan as usual;
+* **Fixed** — a constant speed;
+* **Linear** — minimum speed at or below the chosen minimum temperature, maximum speed at or above the maximum temperature, a straight line in between;
+* **Curve** — a temperature → speed curve with draggable points.
+
+Linear and Curve follow a sensor of your choice: CPU package (MSR) or any SMC sensor present on the Mac (CPU/GPU die and proximity, PCH, memory, heat pipe, palm rest, battery…). Fan settings apply immediately.
+
+Safety: speeds stay within each fan's own min…max from the SMC; above 95 °C CPU every controlled fan runs at full speed; a fan whose sensor can't be read runs at full speed; fans are handed back to macOS before sleep, when the daemon quits and whenever it starts. CLI: `voltbarctl fans` shows fans and sensors, `voltbarctl fans off` hands control back.
+
 ## Protection against unstable undervolts
 
 1. After **Save** the profile is applied immediately but stays unconfirmed for 10 minutes (a countdown is shown in the menu). If the system freezes, panics or restarts during that time, the profile is **not applied** on the next boot and a warning appears in the menu.

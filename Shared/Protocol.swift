@@ -30,6 +30,11 @@ public enum VB {
     /// Сколько секунд после «Сохранить» система должна проработать без сбоя,
     /// чтобы профиль считался подтверждённым и применялся при загрузке.
     public static let confirmSeconds = 600
+
+    /// Pseudo sensor key: CPU package temperature read from MSR (the most responsive CPU reading).
+    public static let packageSensor = "CPU package"
+    /// Above this CPU package temperature every controlled fan runs at full speed, whatever its mode.
+    public static let fanFailsafeTemp: Double = 95
 }
 
 /// Профиль, который пользователь сохраняет.
@@ -84,6 +89,102 @@ public struct VBSettings: Codable, Equatable {
     }
 }
 
+// MARK: - Fans
+
+public enum FanMode: String, Codable, CaseIterable {
+    case auto      // system (SMC) control
+    case fixed     // constant RPM
+    case linear    // min temp -> min RPM, max temp -> max RPM, straight line in between
+    case curve     // user-defined points (temperature -> RPM)
+}
+
+public struct FanCurvePoint: Codable, Equatable {
+    public var temp: Double   // °C
+    public var rpm: Double
+    public init(temp: Double, rpm: Double) { self.temp = temp; self.rpm = rpm }
+}
+
+public struct FanSetting: Codable, Equatable {
+    public var mode: FanMode = .auto
+    public var sensor: String = VB.packageSensor   // sensor key (SMC key or VB.packageSensor)
+    public var fixedRPM: Double = 3000
+    public var linearMinTemp: Double = 50
+    public var linearMaxTemp: Double = 90
+    public var curve: [FanCurvePoint] = []          // sorted by temp; empty = default curve for the fan
+
+    public init() {}
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = FanSetting()
+        mode = (try? c.decodeIfPresent(FanMode.self, forKey: .mode)) ?? d.mode
+        sensor = try c.decodeIfPresent(String.self, forKey: .sensor) ?? d.sensor
+        fixedRPM = try c.decodeIfPresent(Double.self, forKey: .fixedRPM) ?? d.fixedRPM
+        linearMinTemp = try c.decodeIfPresent(Double.self, forKey: .linearMinTemp) ?? d.linearMinTemp
+        linearMaxTemp = try c.decodeIfPresent(Double.self, forKey: .linearMaxTemp) ?? d.linearMaxTemp
+        curve = try c.decodeIfPresent([FanCurvePoint].self, forKey: .curve) ?? d.curve
+    }
+
+    /// Default 5-point curve spanning the fan's RPM range.
+    public static func defaultCurve(min: Double, max: Double) -> [FanCurvePoint] {
+        let temps: [Double] = [40, 55, 70, 80, 90]
+        let fr: [Double] = [0, 0.15, 0.4, 0.7, 1]
+        return zip(temps, fr).map { FanCurvePoint(temp: $0, rpm: (min + (max - min) * $1).rounded()) }
+    }
+
+    /// Target RPM for a sensor temperature, clamped to the fan's range.
+    public func target(temp: Double, min lo: Double, max hi: Double) -> Double? {
+        func clamp(_ v: Double) -> Double { Swift.min(hi, Swift.max(lo, v)) }
+        switch mode {
+        case .auto:
+            return nil
+        case .fixed:
+            return clamp(fixedRPM)
+        case .linear:
+            let span = Swift.max(1, linearMaxTemp - linearMinTemp)
+            let f = Swift.min(1, Swift.max(0, (temp - linearMinTemp) / span))
+            return clamp(lo + (hi - lo) * f)
+        case .curve:
+            let pts = (curve.isEmpty ? FanSetting.defaultCurve(min: lo, max: hi) : curve).sorted { $0.temp < $1.temp }
+            guard let first = pts.first, let last = pts.last else { return nil }
+            if temp <= first.temp { return clamp(first.rpm) }
+            if temp >= last.temp { return clamp(last.rpm) }
+            for (a, b) in zip(pts, pts.dropFirst()) where temp <= b.temp {
+                let f = (temp - a.temp) / Swift.max(0.001, b.temp - a.temp)
+                return clamp(a.rpm + (b.rpm - a.rpm) * f)
+            }
+            return clamp(last.rpm)
+        }
+    }
+}
+
+public struct FanConfig: Codable, Equatable {
+    public var enabled: Bool = false
+    public var fans: [FanSetting] = []
+    public init() {}
+}
+
+public struct FanInfo: Codable, Equatable {
+    public var index: Int
+    public var name: String
+    public var rpm: Double
+    public var minRPM: Double
+    public var maxRPM: Double
+    public var targetRPM: Double?
+    public var controlled: Bool          // VoltBar is driving this fan right now
+    public init(index: Int, name: String, rpm: Double, minRPM: Double, maxRPM: Double, targetRPM: Double?, controlled: Bool) {
+        self.index = index; self.name = name; self.rpm = rpm; self.minRPM = minRPM; self.maxRPM = maxRPM
+        self.targetRPM = targetRPM; self.controlled = controlled
+    }
+}
+
+public struct SensorInfo: Codable, Equatable {
+    public var key: String
+    public var name: String
+    public var value: Double?
+    public init(key: String, name: String, value: Double?) { self.key = key; self.name = name; self.value = value }
+}
+
 /// Текущее состояние железа и демона.
 public struct Status: Codable, Equatable {
     public var daemonVersion: String = ""
@@ -109,6 +210,11 @@ public struct Status: Codable, Equatable {
     public var enforcing: Bool = false
     public var pendingConfirmSeconds: Int? = nil
     public var message: String? = nil          // последнее важное сообщение демона
+    // Fans (since 1.5)
+    public var fans: [FanInfo]? = nil
+    public var sensors: [SensorInfo]? = nil
+    public var fanConfig: FanConfig? = nil
+    public var fanMessage: String? = nil
 
     public init() {}
 }
@@ -118,12 +224,14 @@ public struct Request: Codable {
     public var settings: VBSettings? = nil
     public var msr: UInt32? = nil
     public var value: UInt64? = nil
+    public var fanConfig: FanConfig? = nil      // for cmd "fans"
 
-    public init(cmd: String, settings: VBSettings? = nil, msr: UInt32? = nil, value: UInt64? = nil) {
+    public init(cmd: String, settings: VBSettings? = nil, msr: UInt32? = nil, value: UInt64? = nil, fanConfig: FanConfig? = nil) {
         self.cmd = cmd
         self.settings = settings
         self.msr = msr
         self.value = value
+        self.fanConfig = fanConfig
     }
 }
 

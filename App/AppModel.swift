@@ -11,8 +11,14 @@ final class LiveMetrics: ObservableObject {
     @Published var freqGHz: Double? = nil
     @Published var packageW: Double? = nil
     @Published var pendingConfirmSeconds: Int? = nil
+    @Published var fans: [FanInfo] = []
+    @Published var sensors: [SensorInfo] = []
 
     func update(from s: Status) {
+        let f = (s.fans ?? []).map { fan -> FanInfo in var x = fan; x.rpm = (x.rpm / 10).rounded() * 10; return x }
+        if fans != f { fans = f }
+        let sn = (s.sensors ?? []).map { x -> SensorInfo in var y = x; y.value = y.value.map { ($0 * 2).rounded() / 2 }; return y }
+        if sensors != sn { sensors = sn }
         if tempC != s.tempC { tempC = s.tempC }
         if freqGHz != s.freqGHz { freqGHz = s.freqGHz }
         if packageW != s.packageW { packageW = s.packageW }
@@ -123,11 +129,16 @@ final class AppModel: ObservableObject {
         // The rest changes rarely; publish it only on real changes so the menu isn't re-rendered every second.
         var stable = s
         stable.tempC = nil; stable.freqGHz = nil; stable.packageW = nil; stable.pendingConfirmSeconds = nil
+        stable.fans = nil; stable.sensors = nil
         stable.offsets = s.offsets.map { $0.map { ($0 * 10).rounded() / 10 } }
         if stable != status { status = stable }
         if !draftLoaded && s.kextLoaded {
             draft = initialDraft(from: s)
             draftLoaded = true
+        }
+        if !fanDraftLoaded, let fans = s.fans, !fans.isEmpty {
+            fanDraft = Self.normalized(s.fanConfig ?? FanConfig(), fans: fans)
+            fanDraftLoaded = true
         }
     }
 
@@ -225,6 +236,67 @@ final class AppModel: ObservableObject {
     private func show(_ text: String, error: Bool) {
         resultText = text
         resultIsError = error
+    }
+
+    // MARK: Fans
+
+    @Published var fanDraft = FanConfig()
+    @Published private(set) var fanError: String? = nil
+    private var fanDraftLoaded = false
+    private var fanSendWork: DispatchWorkItem? = nil
+
+    /// One setting per fan, with sensible defaults (middle speed, default curve) for fans never configured.
+    static func normalized(_ c: FanConfig, fans: [FanInfo]) -> FanConfig {
+        var c = c
+        for f in fans {
+            if f.index >= c.fans.count {
+                var s = FanSetting()
+                s.fixedRPM = ((f.minRPM + f.maxRPM) / 2 / 100).rounded() * 100
+                c.fans.append(s)
+            }
+            if c.fans[f.index].curve.isEmpty {
+                c.fans[f.index].curve = FanSetting.defaultCurve(min: f.minRPM, max: f.maxRPM)
+            }
+        }
+        return c
+    }
+
+    func fanSetting(_ i: Int) -> FanSetting { i < fanDraft.fans.count ? fanDraft.fans[i] : FanSetting() }
+
+    /// Changes fan settings; they're applied right away (debounced while a control is being dragged).
+    func updateFans(immediate: Bool = false, _ change: (inout FanConfig) -> Void) {
+        var c = fanDraft
+        change(&c)
+        guard c != fanDraft else { return }
+        fanDraft = c
+        fanSendWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.sendFans() }
+        fanSendWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + (immediate ? 0 : 0.35), execute: work)
+    }
+
+    func updateFan(_ i: Int, immediate: Bool = false, _ change: @escaping (inout FanSetting) -> Void) {
+        updateFans(immediate: immediate) { c in
+            while c.fans.count <= i { c.fans.append(FanSetting()) }
+            change(&c.fans[i])
+        }
+    }
+
+    private func sendFans() {
+        let cfg = fanDraft
+        q.async { [weak self] in
+            let result = Result { try sendRequest(Request(cmd: "fans", fanConfig: cfg), timeout: 10) }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                switch result {
+                case .success(let r):
+                    if let s = r.status { self.apply(status: s) }
+                    self.fanError = r.ok ? nil : (r.error ?? "Error")
+                case .failure(let e):
+                    self.fanError = "\(e)"
+                }
+            }
+        }
     }
 
     // MARK: Launch at login

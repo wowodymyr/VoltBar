@@ -11,13 +11,14 @@ import Foundation
 import IOKit
 import IOKit.pwr_mgt
 
-let daemonVersion = "1.4"
+let daemonVersion = "1.5"
 
 // MARK: - Хранилище
 
 struct Config: Codable {
     var settings: VBSettings? = nil
     var enabled: Bool = false
+    var fans: FanConfig? = nil
 }
 
 struct DaemonState: Codable {
@@ -104,6 +105,9 @@ func bootTime() -> Int {
 final class Core {
     let q = DispatchQueue(label: "com.voltbar.hw")
     let hw = Hardware()
+    lazy var fans = FanController(packageTemp: { [unowned self] in
+        (self.kextReady || self.hw.dev.isOpen) ? (try? self.hw.temperature()).map(Double.init) : nil
+    })
     var config: Config
     var state: DaemonState
     let currentBoot = bootTime()
@@ -183,6 +187,7 @@ final class Core {
 
     /// Called on SIGTERM (normal shutdown, restart, reinstall).
     func markCleanExit() {
+        fans.releaseAll()
         state.cleanExit = true
         persist()
     }
@@ -213,6 +218,15 @@ final class Core {
         t.setEventHandler { [self] in tick() }
         t.resume()
         timers.append(t)
+
+        // Fans: own 1-second loop, independent of the undervolting profile and of the MSR driver.
+        fans.setup()
+        fans.config = config.fans ?? FanConfig()
+        let ft = DispatchSource.makeTimerSource(queue: q)
+        ft.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(200))
+        ft.setEventHandler { [self] in fans.tick() }
+        ft.resume()
+        timers.append(ft)
     }
 
     private var lastEnforce: TimeInterval = 0
@@ -445,6 +459,12 @@ final class Core {
             let (a, b) = Hardware.decodePL(raw: f, unit: unit)
             st.factoryPL1 = a; st.factoryPL2 = b
         }
+        if fans.available {
+            st.fans = fans.fanInfo()
+            st.sensors = fans.sensorInfo()
+            st.fanConfig = fans.config
+            st.fanMessage = fans.message
+        }
         st.tempC = try? hw.temperature()
         st.freqGHz = try? hw.frequencyGHz()
         st.packageW = hw.packageWatts()
@@ -485,6 +505,17 @@ final class Core {
             persist()
             scheduleConfirm(after: Double(VB.confirmSeconds))
             vlog("Profile saved (uid \(uid)): \(s.offsets) turbo=\(s.manageTurbo ? "\(s.turbo)" : "-") power=\(s.managePower ? "\(s.pl1)/\(s.pl2)" : "-")")
+            return Response(ok: true, status: status())
+
+        case "fans":
+            guard fans.available else { return Response(ok: false, error: "Fan control is not available on this Mac") }
+            guard let c = req.fanConfig else { return Response(ok: false, error: "No fan settings") }
+            if let e = fans.validate(c) { return Response(ok: false, error: e) }
+            config.fans = c
+            fans.config = c
+            persist()
+            fans.tick()
+            vlog("Fans: control \(c.enabled ? "on" : "off") — " + c.fans.enumerated().map { "\($0.offset): \($0.element.mode.rawValue)" }.joined(separator: ", ") + " (uid \(uid))")
             return Response(ok: true, status: status())
 
         case "reset":
