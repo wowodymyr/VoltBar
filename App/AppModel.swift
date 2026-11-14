@@ -50,7 +50,7 @@ final class AppModel: ObservableObject {
         // SMAppService.status is an XPC round-trip that can stall for seconds right after login —
         // never do it on the main thread.
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let on = SMAppService.mainApp.status == .enabled
+            let on = LoginItem.isEnabled
             DispatchQueue.main.async { self?.launchAtLogin = on }
         }
     }
@@ -208,14 +208,46 @@ final class AppModel: ObservableObject {
         launchAtLogin = on
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var err: Error? = nil
-            do {
-                if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-            } catch { err = error }
-            let now = SMAppService.mainApp.status == .enabled
+            do { try LoginItem.set(on) } catch { err = error }
+            let now = LoginItem.isEnabled
             DispatchQueue.main.async {
                 self?.launchAtLogin = now
                 if let e = err { self?.show("Launch at login: \(e.localizedDescription)", error: true) }
             }
+        }
+    }
+}
+
+/// Launch at login: SMAppService on macOS 13+, a per-user LaunchAgent on macOS 12.
+enum LoginItem {
+    static let agentLabel = "com.voltbar.app"
+    static var agentPath: String { NSHomeDirectory() + "/Library/LaunchAgents/\(agentLabel).plist" }
+
+    static var isEnabled: Bool {
+        if #available(macOS 13.0, *) { return SMAppService.mainApp.status == .enabled }
+        return FileManager.default.fileExists(atPath: agentPath)
+    }
+
+    static func set(_ on: Bool) throws {
+        if #available(macOS 13.0, *) {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            return
+        }
+        if on {
+            let exe = Bundle.main.executablePath ?? "/Applications/VoltBar.app/Contents/MacOS/VoltBar"
+            let plist: [String: Any] = [
+                "Label": agentLabel,
+                "ProgramArguments": [exe],
+                "RunAtLoad": true,
+                "LimitLoadToSessionType": "Aqua",
+                "ProcessType": "Interactive",
+            ]
+            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            try FileManager.default.createDirectory(atPath: (agentPath as NSString).deletingLastPathComponent,
+                                                    withIntermediateDirectories: true)
+            try data.write(to: URL(fileURLWithPath: agentPath), options: .atomic)
+        } else if FileManager.default.fileExists(atPath: agentPath) {
+            try FileManager.default.removeItem(atPath: agentPath)
         }
     }
 }

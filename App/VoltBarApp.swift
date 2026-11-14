@@ -33,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         let root = CompactMenuView(openSettings: { [weak self] in self?.showSettings() })
             .environmentObject(model)
         let hosting = NSHostingController(rootView: root)
-        hosting.sizingOptions = [.preferredContentSize]
+        if #available(macOS 13.0, *) { hosting.sizingOptions = [.preferredContentSize] }
         popover.contentViewController = hosting
         popover.behavior = .transient
         popover.animates = false
@@ -50,6 +50,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             .removeDuplicates()
             .sink { [weak self] label in self?.updateStatusItem(label) }
             .store(in: &cancellables)
+
+        // macOS 12 has no NSHostingController.sizingOptions: resize popover/window by hand
+        // after SwiftUI has applied each model change.
+        if #unavailable(macOS 13.0) {
+            model.objectWillChange
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in self?.fitToContent() }
+                .store(in: &cancellables)
+        }
+    }
+
+    private func fitToContent() {
+        if popover.isShown, let view = popover.contentViewController?.view {
+            view.layoutSubtreeIfNeeded()
+            let size = view.fittingSize
+            if size != popover.contentSize { popover.contentSize = size }
+        }
+        if let w = settingsWindow, w.isVisible, let view = w.contentViewController?.view {
+            view.layoutSubtreeIfNeeded()
+            let size = view.fittingSize
+            let current = w.contentRect(forFrameRect: w.frame).size
+            if size != current {
+                // Keep the top edge in place while the height changes.
+                var frame = w.frameRect(forContentRect: NSRect(origin: .zero, size: size))
+                frame.origin = NSPoint(x: w.frame.minX, y: w.frame.maxY - frame.height)
+                w.setFrame(frame, display: true)
+            }
+        }
     }
 
     private struct MenuBarLabel: Equatable {
@@ -96,6 +124,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         guard let button = statusItem.button else { return }
         model.popoverVisible = true
         NSApp.activate(ignoringOtherApps: true)
+        if #unavailable(macOS 13.0), let view = popover.contentViewController?.view {
+            view.layoutSubtreeIfNeeded()
+            popover.contentSize = view.fittingSize
+        }
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
     }
@@ -110,7 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         popover.performClose(nil)
         if settingsWindow == nil {
             let hosting = NSHostingController(rootView: SettingsWindowView().environmentObject(model))
-            hosting.sizingOptions = [.preferredContentSize]
+            if #available(macOS 13.0, *) { hosting.sizingOptions = [.preferredContentSize] }
             let w = NSWindow(contentViewController: hosting)
             w.title = "VoltBar Settings"
             w.styleMask = [.titled, .closable, .miniaturizable]
@@ -122,6 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         model.windowVisible = true
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
+        if #unavailable(macOS 13.0) { fitToContent() }
     }
 
     func windowWillClose(_ notification: Notification) {

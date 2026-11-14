@@ -15,6 +15,10 @@ rm -f /Library/PrivilegedHelperTools/com.voltbar.daemon
 rm -f /usr/local/bin/voltbarctl
 rm -f /var/run/com.voltbar.daemon.sock
 rm -rf /Applications/VoltBar.app
+# Login item used on macOS 12 (per-user LaunchAgent).
+for agent in /Users/*/Library/LaunchAgents/com.voltbar.app.plist; do
+    [[ -f "$agent" ]] && rm -f "$agent"
+done
 
 # Restore VoltageShift's launch daemon if the installer disabled it.
 if [[ -f "$SUPPORT/com.sicreative.VoltageShift.plist.disabled" ]]; then

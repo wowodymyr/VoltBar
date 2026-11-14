@@ -15,7 +15,7 @@ if ! xcrun --find swiftc >/dev/null 2>&1; then
 fi
 
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Resources/Info.plist)
-SWIFTC=(xcrun swiftc -O -target x86_64-apple-macos13.0)
+SWIFTC=(xcrun swiftc -O -target x86_64-apple-macos12.0)
 APP=build/VoltBar.app
 ROOT=build/pkgroot
 PKG="build/VoltBar-$VERSION.pkg"

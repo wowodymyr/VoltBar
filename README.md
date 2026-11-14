@@ -39,8 +39,9 @@ VoltBar — андервольтинг Intel Mac из строки меню. Э�
 
 ## Требования
 
-* Intel Haswell или Broadwell Mac (проверялось на MacBookPro11,3 / i7-4850HQ), macOS 13+.
+* Intel Haswell или Broadwell Mac (проверялось на MacBookPro11,3 / i7-4850HQ на macOS 13.7), macOS 12 Monterey или новее.
 * Разблокированный OC Mailbox (EFI пропатчен). Если в меню написано «OC Mailbox is not responding», смещения недоступны, но Turbo и PL работают.
+* На macOS 12 галочка «Launch at login» создаёт `~/Library/LaunchAgents/com.voltbar.app.plist`, на 13 и новее используется системный `SMAppService`.
 * Для сборки нужны Xcode или Command Line Tools, а также Kernel.framework из SDK (есть в Xcode).
 * SIP с разрешёнными неподписанными kext (OCLP это настраивает, `csr-active-config` 03080000).
 

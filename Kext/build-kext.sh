@@ -16,14 +16,14 @@ KEXT="$OUT/VoltBarMSR.kext"
 rm -rf "$OBJ" "$KEXT"
 mkdir -p "$OBJ" "$KEXT/Contents/MacOS"
 
-COMMON=(-target x86_64-apple-macos13.0 -isysroot "$SDK" -I"$KH" -mkernel -nostdinc
+COMMON=(-target x86_64-apple-macos12.0 -isysroot "$SDK" -I"$KH" -mkernel -nostdinc
         -DKERNEL -DKERNEL_PRIVATE=0 -DAPPLE -DNeXT -O2 -Wall -Werror -fno-common -fno-builtin -fno-stack-protector)
 # -nostdinc drops the SDK include paths; add the kernel ones back.
 COMMON+=(-isystem "$KH")
 
 xcrun clang   "${COMMON[@]}" -std=c11 -c kmod_info.c -o "$OBJ/kmod_info.o"
 xcrun clang++ "${COMMON[@]}" -std=gnu++17 -fapple-kext -fno-rtti -fno-exceptions -c VoltBarMSR.cpp -o "$OBJ/VoltBarMSR.o"
-xcrun clang++ -target x86_64-apple-macos13.0 -isysroot "$SDK" -mkernel -fapple-kext -nostdlib \
+xcrun clang++ -target x86_64-apple-macos12.0 -isysroot "$SDK" -mkernel -fapple-kext -nostdlib \
     -Xlinker -kext -L"$SDK/usr/lib" -lkmodc++ -lkmod "$CC_KEXT" \
     "$OBJ/kmod_info.o" "$OBJ/VoltBarMSR.o" -o "$KEXT/Contents/MacOS/VoltBarMSR"
 
