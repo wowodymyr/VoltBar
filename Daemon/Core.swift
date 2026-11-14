@@ -11,7 +11,7 @@ import Foundation
 import IOKit
 import IOKit.pwr_mgt
 
-let daemonVersion = "1.3"
+let daemonVersion = "1.4"
 
 // MARK: - Хранилище
 
@@ -31,6 +31,11 @@ struct DaemonState: Codable {
     var message: String? = nil
     var profileSavedAt: Double? = nil   // epoch of the last "save"
     var handledPanicAt: Double? = nil   // newest kernel panic report already acted upon
+    // Left over from a 1.4 pre-release that could change these registers; restored once, then cleared.
+    var factoryTurboRatios: [Int]? = nil
+    var factoryTjOffset: Int? = nil
+    var factoryBDProchot: Bool? = nil
+    var cleanExit: Bool? = nil          // false while running; true after SIGTERM (normal shutdown/restart)
 }
 
 /// Newest kernel panic report written by macOS (mtime, epoch), if any.
@@ -83,6 +88,10 @@ func sysctlString(_ name: String) -> String {
     return String(cString: buf)
 }
 
+/// kern.boottime is derived from the wall clock and can drift by a second between reads,
+/// so "same boot" means "boot times within a few seconds". Real reboots differ by far more.
+func sameBoot(_ a: Int, _ b: Int) -> Bool { abs(a - b) <= 5 }
+
 func bootTime() -> Int {
     var tv = timeval()
     var size = MemoryLayout<timeval>.size
@@ -113,11 +122,11 @@ final class Core {
         config = loadJSON(Config.self, VB.configPath) ?? Config()
         state = loadJSON(DaemonState.self, VB.statePath) ?? DaemonState()
 
-        let newBoot = state.lastStartBoot != currentBoot
+        let newBoot = !sameBoot(state.lastStartBoot, currentBoot)
         vlog("VoltBar daemon \(daemonVersion) start. CPU: \(cpuName). newBoot=\(newBoot)")
 
         // 1) Неподтверждённый профиль + была перезагрузка => откат.
-        if let pb = state.pendingBoot, state.pendingUntil != nil, pb != currentBoot {
+        if let pb = state.pendingBoot, state.pendingUntil != nil, !sameBoot(pb, currentBoot) {
             if config.enabled {
                 config.enabled = false
                 state.message = "Profile disabled: the system restarted less than \(VB.confirmSeconds / 60) min after saving (possible instability). Check the values and save again."
@@ -134,6 +143,17 @@ final class Core {
             state.message = "Profile disabled: \(state.quickStarts) quick restarts in a row. Check the values and save again."
             vlog(state.message!)
         }
+        // 3) Previous boot ended without a normal shutdown (hard hang, forced power-off): a hang at
+        //    idle leaves no panic report, so this is the only trace of an unstable undervolt.
+        if newBoot, state.cleanExit == false, config.enabled,
+           let s = config.settings, s.offsets.contains(where: { $0 != 0 }) {
+            config.enabled = false
+            state.pendingUntil = nil
+            state.pendingBoot = nil
+            state.message = "Profile disabled: the previous session ended without a normal shutdown (system hang or forced power-off). Use smaller offsets and save again."
+            vlog(state.message!)
+        }
+        state.cleanExit = false
         state.lastStartBoot = currentBoot
         checkForPanic()
         persist()
@@ -161,6 +181,12 @@ final class Core {
         return true
     }
 
+    /// Called on SIGTERM (normal shutdown, restart, reinstall).
+    func markCleanExit() {
+        state.cleanExit = true
+        persist()
+    }
+
     func persist() {
         saveJSON(config, VB.configPath)
         saveJSON(state, VB.statePath)
@@ -178,7 +204,7 @@ final class Core {
             persist()
         }
         // Если профиль был сохранён в эту же загрузку и ещё не подтверждён — дождёмся.
-        if let until = state.pendingUntil, state.pendingBoot == currentBoot {
+        if let until = state.pendingUntil, let pb = state.pendingBoot, sameBoot(pb, currentBoot) {
             scheduleConfirm(after: max(1, until - Date().timeIntervalSince1970))
         }
 
@@ -250,7 +276,9 @@ final class Core {
 
     func onKextReady() {
         // Заводские значения снимаем один раз за загрузку, ДО применения профиля.
-        if state.factoryBoot != currentBoot || state.factoryPL == nil {
+        let freshBoot = !sameBoot(state.factoryBoot, currentBoot)
+        restorePreReleaseRegisters(freshBoot: freshBoot)
+        if freshBoot || state.factoryPL == nil {
             if let pl = try? hw.dev.read(MSR.pkgPowerLimit) { state.factoryPL = pl }
             if let t = try? hw.turboEnabled() { state.factoryTurbo = t }
             state.factoryBoot = currentBoot
@@ -302,6 +330,22 @@ final class Core {
         } catch { errors.append("Power limit: \(error)") }
 
         return errors
+    }
+
+    /// A 1.4 pre-release could change turbo ratios, the TjMax offset and BD PROCHOT. Put them back to
+    /// the factory values it recorded (a reboot resets them anyway), then forget them.
+    func restorePreReleaseRegisters(freshBoot: Bool) {
+        guard state.factoryTurboRatios != nil || state.factoryTjOffset != nil || state.factoryBDProchot != nil else { return }
+        if !freshBoot {
+            if let f = state.factoryTurboRatios, f.count == 4, (try? hw.turboRatios()) != f { try? hw.setTurboRatios(f) }
+            if let f = state.factoryTjOffset, (try? hw.tjOffset()) != f { try? hw.setTjOffset(f) }
+            if let f = state.factoryBDProchot, (try? hw.bdProchot()) != f { try? hw.setBDProchot(f) }
+            vlog("Restored turbo ratios / TjMax offset / BD PROCHOT to factory values")
+        }
+        state.factoryTurboRatios = nil
+        state.factoryTjOffset = nil
+        state.factoryBDProchot = nil
+        persist()
     }
 
     /// Проверяет, что значения на месте; при расхождении применяет заново.

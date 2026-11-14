@@ -106,6 +106,8 @@ enum MSR {
     static let raplUnit: UInt32       = 0x606
     static let pkgPowerLimit: UInt32  = 0x610
     static let pkgEnergy: UInt32      = 0x611
+    static let turboRatio: UInt32     = 0x1AD
+    static let powerCtl: UInt32       = 0x1FC
 }
 
 final class Hardware {
@@ -224,6 +226,38 @@ final class Hardware {
         v |= r1 | (1 << 15)
         v |= (r2 << 32) | (1 << 47)
         try dev.write(MSR.pkgPowerLimit, v)
+    }
+
+    // MARK: Turbo ratio limits (MSR 0x1AD), TjMax offset (0x1A2), BD PROCHOT (0x1FC)
+    // Only used to undo changes made by a 1.4 pre-release (see Core.restorePreReleaseRegisters).
+
+    func turboRatios() throws -> [Int] {
+        let v = try dev.read(MSR.turboRatio)
+        return (0..<4).map { Int((v >> (8 * UInt64($0))) & 0xFF) }
+    }
+
+    func setTurboRatios(_ r: [Int]) throws {
+        let cur = try dev.read(MSR.turboRatio)
+        var v = cur & ~UInt64(0xFFFF_FFFF)
+        for (i, x) in r.prefix(4).enumerated() { v |= UInt64(x & 0xFF) << (8 * UInt64(i)) }
+        if v != cur { try dev.write(MSR.turboRatio, v) }
+    }
+
+    func tjOffset() throws -> Int { Int((try dev.read(MSR.tempTarget) >> 24) & 0xF) }
+
+    func setTjOffset(_ o: Int) throws {
+        let cur = try dev.read(MSR.tempTarget)
+        let v = (cur & ~(UInt64(0xF) << 24)) | (UInt64(o & 0xF) << 24)
+        if v != cur { try dev.write(MSR.tempTarget, v) }
+    }
+
+    /// true = the CPU throttles on external PROCHOT signals (factory behaviour).
+    func bdProchot() throws -> Bool { (try dev.read(MSR.powerCtl)) & 1 == 1 }
+
+    func setBDProchot(_ on: Bool) throws {
+        let cur = try dev.read(MSR.powerCtl)
+        let v = on ? (cur | 1) : (cur & ~UInt64(1))
+        if v != cur { try dev.write(MSR.powerCtl, v) }
     }
 
     func writeRawPowerLimit(_ raw: UInt64) throws {

@@ -15,13 +15,13 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.0</string>
-	<key>CFBundleVersion</key>
-	<string>1.0.0</string>
+	<string>1.1.0</string>
 	<key>CFBundleSupportedPlatforms</key>
 	<array>
 		<string>MacOSX</string>
 	</array>
+	<key>CFBundleVersion</key>
+	<string>1.1.0</string>
 	<key>IOKitPersonalities</key>
 	<dict>
 		<key>VoltBarMSR</key>
@@ -40,6 +40,8 @@
 			<string>VoltBarMSRUserClient</string>
 		</dict>
 	</dict>
+	<key>NSHumanReadableCopyright</key>
+	<string>GPL-3.0. VoltBar project.</string>
 	<key>OSBundleLibraries</key>
 	<dict>
 		<key>com.apple.kpi.iokit</key>
@@ -51,7 +53,5 @@
 	</dict>
 	<key>OSBundleRequired</key>
 	<string>Root</string>
-	<key>NSHumanReadableCopyright</key>
-	<string>GPL-3.0. VoltBar project.</string>
 </dict>
 </plist>

@@ -41,11 +41,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         // Build and lay out the view now, not on the first click.
         hosting.view.layoutSubtreeIfNeeded()
 
-        model.$status
-            .combineLatest(model.$menuBarShowTemp, model.$menuBarShowPower)
-            .map { status, showTemp, showPower -> MenuBarLabel in
-                MenuBarLabel(active: status?.enforcing == true,
-                             text: Self.metricsText(status, temp: showTemp, power: showPower))
+        let metrics = model.live.$tempC.combineLatest(model.live.$packageW)
+        model.$status.map { $0?.enforcing == true }
+            .combineLatest(metrics, model.$menuBarShowTemp, model.$menuBarShowPower)
+            .map { active, m, showTemp, showPower -> MenuBarLabel in
+                MenuBarLabel(active: active, text: Self.metricsText(temp: showTemp ? m.0 : nil, showTemp: showTemp,
+                                                                    power: showPower ? m.1 : nil, showPower: showPower))
             }
             .removeDuplicates()
             .sink { [weak self] label in self?.updateStatusItem(label) }
@@ -85,10 +86,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         var text: String
     }
 
-    private static func metricsText(_ s: Status?, temp: Bool, power: Bool) -> String {
+    private static func metricsText(temp: Int?, showTemp: Bool, power: Double?, showPower: Bool) -> String {
         var parts: [String] = []
-        if temp { parts.append(s?.tempC.map { "\($0)°" } ?? "–°") }
-        if power { parts.append(s?.packageW.map { String(format: "%.1fW", $0) } ?? "–W") }
+        if showTemp { parts.append(temp.map { "\($0)°" } ?? "–°") }
+        if showPower { parts.append(power.map { String(format: "%.1fW", $0) } ?? "–W") }
         return parts.joined(separator: " ")
     }
 
@@ -123,13 +124,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         }
         guard let button = statusItem.button else { return }
         model.popoverVisible = true
-        NSApp.activate(ignoringOtherApps: true)
         if #unavailable(macOS 13.0), let view = popover.contentViewController?.view {
             view.layoutSubtreeIfNeeded()
             popover.contentSize = view.fittingSize
         }
+        // Show first, activate afterwards: app activation can take a moment and shouldn't delay the popover.
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        popover.contentViewController?.view.window?.makeKey()
+        DispatchQueue.main.async { [weak self] in
+            NSApp.activate(ignoringOtherApps: true)
+            self?.popover.contentViewController?.view.window?.makeKey()
+        }
     }
 
     func popoverDidClose(_ notification: Notification) {

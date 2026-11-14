@@ -33,7 +33,8 @@ Offsets are encoded exactly as the OC Mailbox specification defines them: in uni
 1. After **Save** the profile is applied immediately but stays unconfirmed for 10 minutes (a countdown is shown in the menu). If the system freezes, panics or restarts during that time, the profile is **not applied** on the next boot and a warning appears in the menu.
 2. **Kernel panic after saving** (even later than 10 minutes): the daemon finds the `Kernel-*.panic` report in `/Library/Logs/DiagnosticReports` and disables the profile. Unstable undervolts often crash the system at idle rather than under load (a Machine Check in `machine_idle`).
 3. If the daemon starts 4 times in a row, each time running for less than 3 minutes (a boot loop), the profile is disabled as well.
-4. **Reset** restores 0 mV on all planes and the factory Turbo and PL1/PL2 settings, and disables the profile. The profile can be disabled even when the driver is not loaded.
+4. **Hang without a panic** (hard freeze, forced power-off): the daemon records every normal exit (SIGTERM on shutdown/restart). If the previous session ended without one while a profile with voltage offsets was active, the profile is disabled on the next boot.
+5. **Reset** restores 0 mV on all planes and the factory Turbo and PL1/PL2 settings, and disables the profile. The profile can be disabled even when the driver is not loaded.
 
 If you want to restart right after saving, wait for the countdown to finish; otherwise you'll have to save the profile again. Test stability not only under load (Cinebench, Prime95) but also at idle and after waking from sleep.
 
@@ -52,7 +53,7 @@ VoltBar does not depend on VoltageShift: the package includes its own driver, `V
 Differences from VoltageShift.kext:
 * only root can connect to it;
 * MSR reads go through `rdmsr_carefully`: a non-existent register returns an error instead of a kernel panic;
-* writes are only allowed to a whitelist of registers: OC Mailbox 0x150, PERF_CTL 0x199, MISC_ENABLE 0x1A0 (Turbo bit only, on all cores), power limits 0x610 / 0x638 / 0x640. Reserved and lock bits are masked off.
+* writes are only allowed to a whitelist of registers: OC Mailbox 0x150, PERF_CTL 0x199, MISC_ENABLE 0x1A0 (Turbo bit only), TEMPERATURE_TARGET 0x1A2 (TjMax offset only), TURBO_RATIO_LIMIT 0x1AD (never above the factory 1-core ratio), POWER_CTL 0x1FC (BD PROCHOT bit only; these three are not used by the app yet), power limits 0x610 / 0x638 / 0x640. Per-core registers are written on all cores; reserved and lock bits are masked off.
 
 The first time it loads, macOS may ask you to allow the extension (System Settings → Privacy & Security); allow it and restart. The most robust option is to load the kext via OpenCore: copy `VoltBarMSR.kext` to `EFI/OC/Kexts/` and add an entry to `config.plist → Kernel → Add` with `BundlePath = VoltBarMSR.kext`, `ExecutablePath = Contents/MacOS/VoltBarMSR`, `PlistPath = Contents/Info.plist`, `Enabled = true`. After an OCLP update you will have to add the entry again.
 

@@ -34,13 +34,13 @@ public enum VB {
 
 /// Профиль, который пользователь сохраняет.
 public struct VBSettings: Codable, Equatable {
-    public var offsets: [Int]          // 6 значений, мВ
-    public var damageMode: Bool        // расширенный диапазон (аналог --damage)
+    public var offsets: [Int]          // 6 values, mV
+    public var damageMode: Bool        // extended range (like --damage)
     public var manageTurbo: Bool
-    public var turbo: Bool             // true = Turbo Boost включён
+    public var turbo: Bool             // true = Turbo Boost enabled
     public var managePower: Bool
-    public var pl1: Double             // Вт, long term
-    public var pl2: Double             // Вт, short term
+    public var pl1: Double             // W, long term
+    public var pl2: Double             // W, short term
 
     public init(offsets: [Int] = Array(repeating: 0, count: 6),
                 damageMode: Bool = false,
@@ -55,7 +55,20 @@ public struct VBSettings: Codable, Equatable {
         self.pl2 = pl2
     }
 
-    /// Проверка значений; возвращает текст ошибки или nil.
+    // Tolerant decoding: a missing key falls back to the default instead of discarding the whole profile.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = VBSettings()
+        offsets = try c.decodeIfPresent([Int].self, forKey: .offsets) ?? d.offsets
+        damageMode = try c.decodeIfPresent(Bool.self, forKey: .damageMode) ?? d.damageMode
+        manageTurbo = try c.decodeIfPresent(Bool.self, forKey: .manageTurbo) ?? d.manageTurbo
+        turbo = try c.decodeIfPresent(Bool.self, forKey: .turbo) ?? d.turbo
+        managePower = try c.decodeIfPresent(Bool.self, forKey: .managePower) ?? d.managePower
+        pl1 = try c.decodeIfPresent(Double.self, forKey: .pl1) ?? d.pl1
+        pl2 = try c.decodeIfPresent(Double.self, forKey: .pl2) ?? d.pl2
+    }
+
+    /// Validates values; returns an error text or nil.
     public func validate() -> String? {
         if offsets.count != 6 { return "Exactly 6 offset values are required" }
         let range = damageMode ? VB.damageRange : VB.normalRange

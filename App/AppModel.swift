@@ -4,7 +4,24 @@ import Foundation
 import ServiceManagement
 import SwiftUI
 
+/// Values that change every poll (temperature, clocks, power, countdown). Kept apart from AppModel so that
+/// a new reading re-renders only the few views that show it, not the whole menu with its sliders.
+final class LiveMetrics: ObservableObject {
+    @Published var tempC: Int? = nil
+    @Published var freqGHz: Double? = nil
+    @Published var packageW: Double? = nil
+    @Published var pendingConfirmSeconds: Int? = nil
+
+    func update(from s: Status) {
+        if tempC != s.tempC { tempC = s.tempC }
+        if freqGHz != s.freqGHz { freqGHz = s.freqGHz }
+        if packageW != s.packageW { packageW = s.packageW }
+        if pendingConfirmSeconds != s.pendingConfirmSeconds { pendingConfirmSeconds = s.pendingConfirmSeconds }
+    }
+}
+
 final class AppModel: ObservableObject {
+    let live = LiveMetrics()
     @Published private(set) var status: Status? = nil
     @Published private(set) var connected = true
     @Published private(set) var connectionError: String? = nil
@@ -92,14 +109,22 @@ final class AppModel: ObservableObject {
         }
     }
 
+    #if VOLTBAR_TESTING
+    func injectForTesting(_ s: Status) { apply(status: s) }
+    #endif
+
     private func apply(status s: Status) {
         if s.cpuName != status?.cpuName {
             var name = s.cpuName
             for junk in ["(R)", "(TM)", "(tm)", " CPU"] { name = name.replacingOccurrences(of: junk, with: "") }
             cpuModel = name.split(separator: " ").joined(separator: " ")
         }
-        // Publishing only real changes keeps SwiftUI from re-rendering for nothing.
-        if s != status { status = s }
+        live.update(from: s)
+        // The rest changes rarely; publish it only on real changes so the menu isn't re-rendered every second.
+        var stable = s
+        stable.tempC = nil; stable.freqGHz = nil; stable.packageW = nil; stable.pendingConfirmSeconds = nil
+        stable.offsets = s.offsets.map { $0.map { ($0 * 10).rounded() / 10 } }
+        if stable != status { status = stable }
         if !draftLoaded && s.kextLoaded {
             draft = initialDraft(from: s)
             draftLoaded = true

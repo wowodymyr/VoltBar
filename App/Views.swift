@@ -67,15 +67,15 @@ struct HeaderView: View {
 }
 
 struct MetricsView: View {
-    let status: Status
+    @ObservedObject var live: LiveMetrics
 
     var body: some View {
         HStack {
-            metric("Temperature", status.tempC.map { "\($0) °C" } ?? "—")
+            metric("Temperature", live.tempC.map { "\($0) °C" } ?? "—")
             Spacer()
-            metric("Frequency", status.freqGHz.map { String(format: "%.1f GHz", $0) } ?? "—")
+            metric("Frequency", live.freqGHz.map { String(format: "%.1f GHz", $0) } ?? "—")
             Spacer()
-            metric("Package", status.packageW.map { String(format: "%.1f W", $0) } ?? "—")
+            metric("Package", live.packageW.map { String(format: "%.1f W", $0) } ?? "—")
         }
     }
 
@@ -96,12 +96,20 @@ struct StatusNotes: View {
             if !status.undervoltAvailable {
                 Notice(text: "OC Mailbox is not responding (OC_Locked): voltage offsets are unavailable, but Turbo and power limits still work.")
             }
-            if let sec = status.pendingConfirmSeconds, sec > 0 {
-                Notice(text: "Stability check: \(sec / 60):\(String(format: "%02d", sec % 60)) left. If the system crashes or restarts before then, the profile will not be applied on next boot.", kind: .info)
-            }
+            ConfirmCountdown(live: model.live)
             if let m = status.message {
                 Notice(text: m)
             }
+        }
+    }
+}
+
+struct ConfirmCountdown: View {
+    @ObservedObject var live: LiveMetrics
+
+    var body: some View {
+        if let sec = live.pendingConfirmSeconds, sec > 0 {
+            Notice(text: "Stability check: \(sec / 60):\(String(format: "%02d", sec % 60)) left. If the system crashes or restarts before then, the profile will not be applied on next boot.", kind: .info)
         }
     }
 }
@@ -129,7 +137,11 @@ struct OffsetRow: View {
     let index: Int
     let current: Double?
 
-    private var value: Int { model.draft.offsets[index] }
+    /// Slider position while it is being dragged. Kept local so a drag re-renders only this row;
+    /// the model (and the rest of the menu) is updated once, when the drag ends.
+    @State private var dragValue: Double? = nil
+
+    private var value: Int { dragValue.map { Int($0.rounded()) } ?? model.draft.offsets[index] }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -151,10 +163,20 @@ struct OffsetRow: View {
             HStack(spacing: 4) {
                 Button { model.setOffset(index, value - 1) } label: { Image(systemName: "minus") }
                     .buttonStyle(.borderless)
-                Slider(value: Binding(get: { Double(value) },
-                                      set: { model.setOffset(index, Int($0.rounded())) }),
+                // No `step:` — on macOS it turns into hundreds of tick marks and makes the row take seconds to build.
+                // Values are rounded in the binding instead.
+                Slider(value: Binding(get: { dragValue ?? Double(model.draft.offsets[index]) },
+                                      set: { v in
+                                          let r = v.rounded()
+                                          if dragValue != r { dragValue = r }
+                                      }),
                        in: Double(model.offsetRange.lowerBound)...Double(model.offsetRange.upperBound),
-                       step: 1)
+                       onEditingChanged: { editing in
+                           if !editing, let v = dragValue {
+                               model.setOffset(index, Int(v))
+                               dragValue = nil
+                           }
+                       })
                     .controlSize(.small)
                     // Center mark at 0 mV (the range is symmetric, so 0 is exactly in the middle).
                     .overlay(Rectangle().fill(Color.primary.opacity(0.6)).frame(width: 1.5, height: 10).allowsHitTesting(false))
@@ -253,7 +275,7 @@ struct PowerRow: View {
             HStack(spacing: 4) {
                 Button { value = max(VB.powerRange.lowerBound, value - 1) } label: { Image(systemName: "minus") }
                     .buttonStyle(.borderless)
-                Slider(value: $value, in: VB.powerRange, step: 1)
+                Slider(value: Binding(get: { value }, set: { value = $0.rounded() }), in: VB.powerRange)
                     .controlSize(.small)
                 Button { value = min(VB.powerRange.upperBound, value + 1) } label: { Image(systemName: "plus") }
                     .buttonStyle(.borderless)
@@ -297,7 +319,7 @@ struct CompactMenuView: View {
             HeaderView()
             StatusGate { s in
                 VStack(alignment: .leading, spacing: 10) {
-                    MetricsView(status: s)
+                    MetricsView(live: model.live)
                     StatusNotes(status: s)
                     Divider()
                     VStack(alignment: .leading, spacing: 6) {
@@ -330,44 +352,48 @@ struct CompactMenuView: View {
 struct SettingsWindowView: View {
     @EnvironmentObject var model: AppModel
 
+    private let column: CGFloat = 400
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HeaderView()
             StatusGate { s in
                 VStack(alignment: .leading, spacing: 12) {
-                    MetricsView(status: s)
+                    MetricsView(live: model.live)
                     StatusNotes(status: s)
                     Divider()
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("Voltage offset").font(.headline)
-                            Spacer()
-                            Toggle("Damage mode", isOn: Binding(get: { model.draft.damageMode },
-                                                                set: { model.setDamageMode($0) }))
-                                .toggleStyle(.checkbox)
+                    // Two columns so the window fits a 900-pt-high screen.
+                    HStack(alignment: .top, spacing: 20) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text("Voltage offset").font(.headline)
+                                    Spacer()
+                                    Toggle("Damage mode", isOn: Binding(get: { model.draft.damageMode },
+                                                                        set: { model.setDamageMode($0) }))
+                                        .toggleStyle(.checkbox)
+                                }
+                                OffsetWarnings()
+                                ForEach(0..<6, id: \.self) { i in
+                                    OffsetRow(index: i, current: s.offsets[i])
+                                }
+                            }
+                            .disabled(!s.undervoltAvailable)
+                            Divider()
+                            TurboRow(status: s)
                         }
-                        OffsetWarnings()
-                        ForEach(0..<6, id: \.self) { i in
-                            OffsetRow(index: i, current: s.offsets[i])
+                        .frame(width: column)
+                        Divider()
+                        VStack(alignment: .leading, spacing: 12) {
+                            PowerSection(status: s)
+                            Divider()
+                            MenuBarSection()
                         }
+                        .frame(width: column)
                     }
-                    .disabled(!s.undervoltAvailable)
-                    Divider()
-                    TurboRow(status: s)
-                    Divider()
-                    PowerSection(status: s)
                     Divider()
                     ActionButtons()
                 }
-            }
-            Divider()
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Menu bar").font(.headline)
-                HStack(spacing: 18) {
-                    Toggle("Show CPU temperature", isOn: $model.menuBarShowTemp)
-                    Toggle("Show CPU power", isOn: $model.menuBarShowPower)
-                }
-                .toggleStyle(.checkbox)
             }
             Divider()
             HStack {
@@ -381,7 +407,19 @@ struct SettingsWindowView: View {
             }
         }
         .padding(18)
-        .frame(width: 440)
-        .fixedSize(horizontal: false, vertical: true)
+        .fixedSize()
+    }
+}
+
+struct MenuBarSection: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Menu bar").font(.headline)
+            Toggle("Show CPU temperature in the menu bar", isOn: $model.menuBarShowTemp)
+            Toggle("Show CPU power in the menu bar", isOn: $model.menuBarShowPower)
+        }
+        .toggleStyle(.checkbox)
     }
 }
