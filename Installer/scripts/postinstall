@@ -1,0 +1,31 @@
+#!/bin/bash
+# VoltBar.pkg postinstall: start the daemon and open the menu bar app for the logged-in user.
+
+[[ "${3:-/}" == "/" ]] || exit 0
+
+SUPPORT="/Library/Application Support/VoltBar"
+/bin/mkdir -p "$SUPPORT"
+/bin/chmod 755 "$SUPPORT"
+/usr/sbin/chown root:wheel /Library/LaunchDaemons/com.voltbar.daemon.plist \
+    /Library/PrivilegedHelperTools/com.voltbar.daemon
+/bin/chmod 644 /Library/LaunchDaemons/com.voltbar.daemon.plist
+/bin/chmod 755 /Library/PrivilegedHelperTools/com.voltbar.daemon
+
+# Our MSR driver: kmutil only loads kexts owned by root:wheel. The daemon loads it at startup.
+if [[ -d "$SUPPORT/VoltBarMSR.kext" ]]; then
+    /usr/sbin/chown -R root:wheel "$SUPPORT/VoltBarMSR.kext"
+    /bin/chmod -R go-w "$SUPPORT/VoltBarMSR.kext"
+    /usr/bin/xattr -dr com.apple.quarantine "$SUPPORT/VoltBarMSR.kext" 2>/dev/null || true
+fi
+
+/bin/launchctl bootout system/com.voltbar.daemon 2>/dev/null || true
+/bin/launchctl bootstrap system /Library/LaunchDaemons/com.voltbar.daemon.plist || \
+    /bin/launchctl kickstart -k system/com.voltbar.daemon || true
+
+USER_NAME=$(/usr/bin/stat -f %Su /dev/console)
+if [[ -n "$USER_NAME" && "$USER_NAME" != "root" && "$USER_NAME" != "loginwindow" ]]; then
+    USER_ID=$(/usr/bin/id -u "$USER_NAME")
+    /bin/launchctl asuser "$USER_ID" /usr/bin/sudo -u "$USER_NAME" /usr/bin/open /Applications/VoltBar.app || true
+fi
+
+exit 0

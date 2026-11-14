@@ -1,0 +1,20 @@
+#!/bin/bash
+# VoltBar.pkg preinstall: stop the running app and daemon before files are replaced.
+
+# Only touch the running system when installing onto the boot volume.
+[[ "${3:-/}" == "/" ]] || exit 0
+
+/usr/bin/pkill -x VoltBar 2>/dev/null || true
+/bin/launchctl bootout system/com.voltbar.daemon 2>/dev/null || true
+
+# VoltageShift's own launchd job would fight with VoltBar over the same MSRs.
+# Disable it, keeping a backup copy so it can be restored by hand.
+VS=/Library/LaunchDaemons/com.sicreative.VoltageShift.plist
+if [[ -f "$VS" ]]; then
+    /bin/launchctl bootout system/com.sicreative.VoltageShift 2>/dev/null || true
+    /bin/mkdir -p "/Library/Application Support/VoltBar"
+    /bin/mv -f "$VS" "/Library/Application Support/VoltBar/com.sicreative.VoltageShift.plist.disabled"
+    echo "VoltBar: disabled conflicting com.sicreative.VoltageShift launchd job (backup kept)"
+fi
+
+exit 0

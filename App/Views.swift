@@ -1,0 +1,387 @@
+// VoltBar.app — SwiftUI views: compact menu-bar popover and the full settings window.
+// All text uses the primary label color; meaning is carried by icons, not by gray/colored text.
+
+import SwiftUI
+import AppKit
+
+// MARK: - Building blocks
+
+struct Notice: View {
+    enum Kind { case info, success, warning, danger }
+    let text: String
+    var kind: Kind = .warning
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: icon).foregroundColor(tint)
+            Text(text)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+    }
+
+    private var icon: String {
+        switch kind {
+        case .info: return "info.circle.fill"
+        case .success: return "checkmark.circle.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .danger: return "exclamationmark.octagon.fill"
+        }
+    }
+
+    private var tint: Color {
+        switch kind {
+        case .info: return .blue
+        case .success: return .green
+        case .warning: return .orange
+        case .danger: return .red
+        }
+    }
+}
+
+struct HeaderView: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Image(systemName: "bolt.fill").foregroundColor(.yellow)
+                Text("VoltBar").font(.headline)
+                Spacer()
+                if let s = model.status {
+                    Text(s.enforcing ? "Profile active" : "Profile off")
+                        .font(.callout)
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(Capsule().fill(s.enforcing ? Color.green.opacity(0.3) : Color.primary.opacity(0.1)))
+                }
+            }
+            let cpu = [model.cpuModel, model.macModel].filter { !$0.isEmpty }.joined(separator: " · ")
+            if !cpu.isEmpty {
+                Label(cpu, systemImage: "cpu")
+                    .font(.callout)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+}
+
+struct MetricsView: View {
+    let status: Status
+
+    var body: some View {
+        HStack {
+            metric("Temperature", status.tempC.map { "\($0) °C" } ?? "—")
+            Spacer()
+            metric("Frequency", status.freqGHz.map { String(format: "%.1f GHz", $0) } ?? "—")
+            Spacer()
+            metric("Package", status.packageW.map { String(format: "%.1f W", $0) } ?? "—")
+        }
+    }
+
+    private func metric(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title).font(.caption)
+            Text(value).font(.system(.body, design: .rounded).weight(.medium)).monospacedDigit()
+        }
+    }
+}
+
+struct StatusNotes: View {
+    @EnvironmentObject var model: AppModel
+    let status: Status
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !status.undervoltAvailable {
+                Notice(text: "OC Mailbox is not responding (OC_Locked): voltage offsets are unavailable, but Turbo and power limits still work.")
+            }
+            if let sec = status.pendingConfirmSeconds, sec > 0 {
+                Notice(text: "Stability check: \(sec / 60):\(String(format: "%02d", sec % 60)) left. If the system crashes or restarts before then, the profile will not be applied on next boot.", kind: .info)
+            }
+            if let m = status.message {
+                Notice(text: m)
+            }
+        }
+    }
+}
+
+/// Shows a connection / kext problem instead of the content, or the content with the current status.
+struct StatusGate<Content: View>: View {
+    @EnvironmentObject var model: AppModel
+    @ViewBuilder let content: (Status) -> Content
+
+    var body: some View {
+        if !model.connected {
+            Notice(text: "The VoltBar daemon is not responding. Reinstall VoltBar.pkg.\n\(model.connectionError ?? "")", kind: .danger)
+        } else if let s = model.status, !s.kextLoaded {
+            Notice(text: "The VoltBarMSR driver is not loaded yet. If macOS asks to allow a blocked extension, approve it in System Settings → Privacy & Security and restart. Alternatively load VoltBarMSR.kext via OpenCore (Kernel → Add).")
+        } else if let s = model.status {
+            content(s)
+        } else {
+            HStack { ProgressView().controlSize(.small); Text("Connecting…").font(.callout) }
+        }
+    }
+}
+
+struct OffsetRow: View {
+    @EnvironmentObject var model: AppModel
+    let index: Int
+    let current: Double?
+
+    private var value: Int { model.draft.offsets[index] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text(VB.planeNames[index]).font(.callout.weight(.medium))
+                Spacer()
+                if let c = current {
+                    Text(String(format: "now %+.0f", c.rounded() == 0 ? 0 : c))
+                        .font(.callout).monospacedDigit()
+                }
+                Button { model.setOffset(index, 0) } label: {
+                    Text(value == 0 ? "0 mV" : String(format: "%+d mV", value))
+                        .font(.callout.weight(.semibold)).monospacedDigit()
+                        .frame(width: 70, alignment: .trailing)
+                }
+                .buttonStyle(.plain)
+                .help("Click to set 0 mV")
+            }
+            HStack(spacing: 4) {
+                Button { model.setOffset(index, value - 1) } label: { Image(systemName: "minus") }
+                    .buttonStyle(.borderless)
+                Slider(value: Binding(get: { Double(value) },
+                                      set: { model.setOffset(index, Int($0.rounded())) }),
+                       in: Double(model.offsetRange.lowerBound)...Double(model.offsetRange.upperBound),
+                       step: 1)
+                    .controlSize(.small)
+                    // Center mark at 0 mV (the range is symmetric, so 0 is exactly in the middle).
+                    .overlay(Rectangle().fill(Color.primary.opacity(0.6)).frame(width: 1.5, height: 10).allowsHitTesting(false))
+                Button { model.setOffset(index, value + 1) } label: { Image(systemName: "plus") }
+                    .buttonStyle(.borderless)
+            }
+        }
+    }
+}
+
+struct OffsetWarnings: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        if model.draft.damageMode {
+            Notice(text: "Extended range −500…+500 mV. Large offsets can freeze the system or damage the CPU!", kind: .danger)
+        } else if model.draft.offsets.contains(where: { $0 > 0 }) {
+            Notice(text: "Positive offset = overvolting: more heat and power draw, use with care.")
+        }
+    }
+}
+
+struct TurboRow: View {
+    @EnvironmentObject var model: AppModel
+    let status: Status
+
+    var body: some View {
+        HStack {
+            Text("Turbo Boost").font(.headline)
+            Spacer()
+            Picker("", selection: Binding<Int>(
+                get: { model.draft.manageTurbo ? (model.draft.turbo ? 1 : 2) : 0 },
+                set: { v in
+                    model.draft.manageTurbo = v != 0
+                    model.draft.turbo = v != 2
+                })) {
+                Text("Default").tag(0)
+                Text("On").tag(1)
+                Text("Off").tag(2)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 200)
+        }
+        .help("Now: " + (status.turboEnabled.map { $0 ? "enabled" : "disabled" } ?? "—"))
+    }
+}
+
+struct PowerSection: View {
+    @EnvironmentObject var model: AppModel
+    let status: Status
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Power limits").font(.headline)
+                Spacer()
+                Toggle("Custom", isOn: $model.draft.managePower)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+            }
+            if status.powerLocked == true {
+                Notice(text: "MSR 0x610 is locked by firmware — PL1/PL2 cannot be changed.")
+            }
+            Text("Now: PL1 \(fmtW(status.pl1)), PL2 \(fmtW(status.pl2)) · factory \(fmtW(status.factoryPL1)) / \(fmtW(status.factoryPL2))")
+                .font(.callout)
+            if model.draft.managePower {
+                PowerRow(title: "PL1 (long term)", value: Binding(
+                    get: { model.draft.pl1 },
+                    set: { model.draft.pl1 = $0; if model.draft.pl2 < $0 { model.draft.pl2 = $0 } }))
+                PowerRow(title: "PL2 (short term)", value: Binding(
+                    get: { model.draft.pl2 },
+                    set: { model.draft.pl2 = max($0, model.draft.pl1) }))
+            }
+        }
+        .disabled(status.powerLocked == true)
+    }
+
+    private func fmtW(_ v: Double?) -> String {
+        guard let v = v else { return "—" }
+        return v == v.rounded() ? "\(Int(v)) W" : String(format: "%.2f W", v)
+    }
+}
+
+struct PowerRow: View {
+    let title: String
+    @Binding var value: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(title).font(.callout.weight(.medium))
+                Spacer()
+                Text("\(Int(value)) W").font(.callout.weight(.semibold)).monospacedDigit()
+            }
+            HStack(spacing: 4) {
+                Button { value = max(VB.powerRange.lowerBound, value - 1) } label: { Image(systemName: "minus") }
+                    .buttonStyle(.borderless)
+                Slider(value: $value, in: VB.powerRange, step: 1)
+                    .controlSize(.small)
+                Button { value = min(VB.powerRange.upperBound, value + 1) } label: { Image(systemName: "plus") }
+                    .buttonStyle(.borderless)
+            }
+        }
+    }
+}
+
+struct ActionButtons: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Button("Reset") { model.reset() }
+                    .help("Restore factory values and disable the profile")
+                if model.isDirty {
+                    Button("Revert changes") { model.revertDraft() }
+                }
+                Spacer()
+                if model.busy { ProgressView().controlSize(.small) }
+                Button("Save") { model.save() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(model.busy || !model.isDirty)
+            }
+            if let t = model.resultText {
+                Notice(text: t, kind: model.resultIsError ? .danger : .success)
+            }
+        }
+    }
+}
+
+// MARK: - Compact popover (menu bar)
+
+struct CompactMenuView: View {
+    @EnvironmentObject var model: AppModel
+    let openSettings: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HeaderView()
+            StatusGate { s in
+                VStack(alignment: .leading, spacing: 10) {
+                    MetricsView(status: s)
+                    StatusNotes(status: s)
+                    Divider()
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Voltage offset").font(.headline)
+                        OffsetWarnings()
+                        OffsetRow(index: 0, current: s.offsets[0])
+                        OffsetRow(index: 1, current: s.offsets[1])
+                    }
+                    .disabled(!s.undervoltAvailable)
+                    Divider()
+                    TurboRow(status: s)
+                    Divider()
+                    ActionButtons()
+                }
+            }
+            Divider()
+            HStack {
+                Button { openSettings() } label: { Label("All settings…", systemImage: "slider.horizontal.3") }
+                Spacer()
+                Button("Quit") { NSApp.terminate(nil) }
+            }
+        }
+        .padding(14)
+        .frame(width: 360)
+    }
+}
+
+// MARK: - Full settings window
+
+struct SettingsWindowView: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HeaderView()
+            StatusGate { s in
+                VStack(alignment: .leading, spacing: 12) {
+                    MetricsView(status: s)
+                    StatusNotes(status: s)
+                    Divider()
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Voltage offset").font(.headline)
+                            Spacer()
+                            Toggle("Damage mode", isOn: Binding(get: { model.draft.damageMode },
+                                                                set: { model.setDamageMode($0) }))
+                                .toggleStyle(.checkbox)
+                        }
+                        OffsetWarnings()
+                        ForEach(0..<6, id: \.self) { i in
+                            OffsetRow(index: i, current: s.offsets[i])
+                        }
+                    }
+                    .disabled(!s.undervoltAvailable)
+                    Divider()
+                    TurboRow(status: s)
+                    Divider()
+                    PowerSection(status: s)
+                    Divider()
+                    ActionButtons()
+                }
+            }
+            Divider()
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Menu bar").font(.headline)
+                HStack(spacing: 18) {
+                    Toggle("Show CPU temperature", isOn: $model.menuBarShowTemp)
+                    Toggle("Show CPU power", isOn: $model.menuBarShowPower)
+                }
+                .toggleStyle(.checkbox)
+            }
+            Divider()
+            HStack {
+                Toggle("Launch VoltBar at login", isOn: Binding(get: { model.launchAtLogin },
+                                                                set: { model.setLaunchAtLogin($0) }))
+                    .toggleStyle(.checkbox)
+                Spacer()
+                if let d = model.status?.driver {
+                    Text("Driver: \(d == VB.ownKextClass ? "VoltBarMSR (built-in)" : d)").font(.callout)
+                }
+            }
+        }
+        .padding(18)
+        .frame(width: 440)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}

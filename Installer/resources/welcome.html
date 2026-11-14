@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>body{font-family:-apple-system,sans-serif;font-size:13px;line-height:1.45}h2{margin-top:0}</style>
+</head><body>
+<h2>VoltBar ⚡</h2>
+<p>Menu bar undervolting for Intel Haswell / Broadwell Macs, with its own MSR driver <b>VoltBarMSR.kext</b>.</p>
+<p>This installs:</p>
+<ul>
+  <li><b>VoltBar.app</b> in /Applications (menu bar app)</li>
+  <li>a background service <code>com.voltbar.daemon</code> that applies your profile at boot and after sleep</li>
+  <li>the command-line tool <code>/usr/local/bin/voltbarctl</code></li>
+  <li>the driver <code>VoltBarMSR.kext</code> in /Library/Application Support/VoltBar (loaded by the service)</li>
+</ul>
+<p>On first use macOS may ask you to allow the VoltBarMSR extension in <b>System Settings → Privacy &amp; Security</b> and restart. Unsigned kernel extensions must be permitted by SIP (as set up by OpenCore Legacy Patcher).</p>
+<p>If VoltageShift's own launch daemon is installed, it will be disabled so the two don't conflict (a backup is kept in /Library/Application Support/VoltBar).</p>
+<p style="color:#b00"><b>Warning:</b> wrong voltage settings can freeze the system, and overvolting can damage the CPU. Use at your own risk.</p>
+</body></html>
