@@ -1,119 +1,123 @@
 # VoltBar
 
-VoltBar — андервольтинг Intel Mac из строки меню. Это полный аналог [VoltageShift](https://github.com/sicreative/VoltageShift) с GUI.
-Использует тот же `VoltageShift.kext` (класс `VoltageShiftAnVMSR`), но всю пользовательскую логику пишет заново:
+VoltBar is a menu bar undervolting tool for Intel Macs — a full-featured, GUI-driven alternative to [VoltageShift](https://github.com/sicreative/VoltageShift).
+It ships its own MSR driver (`VoltBarMSR.kext`) and rewrites all the user-space logic from scratch:
 
-* **Меню в меню-баре** (иконка ⚡): шесть ползунков смещения напряжения (CPU, GPU, CPU Cache, System Agent, Analog I/O, Digital I/O), Turbo Boost, PL1/PL2, модель CPU, живые температура, частота и мощность пакета, кнопки **Save** и **Reset**.
-* **Root-демон** `com.voltbar.daemon` (launchd) применяет профиль:
-  * при загрузке системы;
-  * после выхода из сна и гибернации (подписка на `IORegisterForSystemPower`, применение через 2 с и проверка через 15 с);
-  * каждые 30 с проверяет, что значения на месте, и при расхождении восстанавливает их. У VoltageShift такая проверка по умолчанию раз в 160 минут.
-* **CLI** `voltbarctl` с командами `info`, `mon`, `offset`, `turbo`, `power`, `read`, `write` и `--damage`, как у voltageshift.
+* **Menu bar app** (⚡ icon): voltage offset sliders for six planes (CPU, GPU, CPU Cache, System Agent, Analog I/O, Digital I/O), Turbo Boost, PL1/PL2, CPU model, live temperature, frequency and package power, **Save** and **Reset** buttons. Optionally shows CPU temperature and power right in the menu bar.
+* **Root daemon** `com.voltbar.daemon` (launchd) applies the profile:
+  * at boot;
+  * after waking from sleep or hibernation (subscribes to `IORegisterForSystemPower`, applies after 2 s and re-checks after 15 s);
+  * every 30 s it checks that the values are still in place and restores them if not. VoltageShift does this once every 160 minutes by default.
+* **CLI** `voltbarctl` with `info`, `mon`, `offset`, `turbo`, `power`, `read`, `write` and `--damage`, just like voltageshift.
 
-> ⚠️ Инструмент для опытных пользователей. Слишком сильный андервольт даёт зависания и паники, повышение напряжения (положительное смещение) может повредить CPU.
+> ⚠️ This is a tool for advanced users. Too deep an undervolt causes freezes and kernel panics; raising the voltage (positive offset) can damage the CPU.
 
-## Что поддерживается (как у VoltageShift)
+## Features (compared to VoltageShift)
 
-| Функция | VoltageShift | VoltBar |
+| Feature | VoltageShift | VoltBar |
 |---|---|---|
-| Смещение 6 плоскостей через OC Mailbox (MSR 0x150) | `offset` | ползунки / `voltbarctl offset` |
-| Диапазон смещения | −250…0 мВ, `--damage` для выхода за него | −250…+250 мВ (ползунок с нулём посередине), damage: −500…+500 мВ |
-| Turbo Boost (MSR 0x1A0, бит 38) | `turbo 0/1` | Заводское / Вкл / Выкл |
-| PL1/PL2 (MSR 0x610) | `power` | ползунки / `voltbarctl power` |
-| info / mon (частота, температура, мощность) | ✓ | в меню / `voltbarctl info`, `mon` |
+| Offsets for 6 planes via OC Mailbox (MSR 0x150) | `offset` | sliders / `voltbarctl offset` |
+| Offset range | −250…0 mV, `--damage` to go beyond | −250…+250 mV (slider centered at 0), damage mode: −500…+500 mV |
+| Turbo Boost (MSR 0x1A0, bit 38) | `turbo 0/1` | Default / On / Off |
+| PL1/PL2 (MSR 0x610) | `power` | sliders / `voltbarctl power` |
+| info / mon (frequency, temperature, power) | ✓ | in the menu / `voltbarctl info`, `mon` |
 | read / write MSR | ✓ | `sudo voltbarctl read/write` |
-| Автоприменение при загрузке | `buildlaunchd` | ✓ |
-| Восстановление после сна и гибернации | по таймеру | сразу по событию пробуждения + каждые 30 с |
-| Защита от бутлупа | — | ✓ (см. ниже) |
+| Apply at boot | `buildlaunchd` | ✓ |
+| Restore after sleep and hibernation | on a timer | immediately on wake + every 30 s |
+| Boot-loop and kernel-panic protection | — | ✓ (see below) |
 
-Смещение кодируется точно по спецификации OC Mailbox: в единицах 1/1.024 мВ. VoltageShift кодирует с округлением до 1 мВ, поэтому при одинаковой цифре, например −100, VoltBar выставит примерно на 2 % меньше по модулю. Это и есть ровно −100 мВ.
+Offsets are encoded exactly as the OC Mailbox specification defines them: in units of 1/1.024 mV. VoltageShift rounds to 1 mV, so for the same number, say −100, VoltBar sets a value about 2 % smaller in magnitude — which is exactly −100 mV.
 
-## Защита от нестабильного андервольта
+## Protection against unstable undervolts
 
-1. После **Save** профиль сразу применяется, но 10 минут считается неподтверждённым (в меню идёт обратный отсчёт). Если за это время система зависнет, упадёт в панику или будет перезагружена, при следующей загрузке профиль **не применится**, и в меню появится предупреждение.
-2. **Kernel panic после сохранения** (в том числе позже 10 минут): демон находит отчёт `Kernel-*.panic` в `/Library/Logs/DiagnosticReports` и отключает профиль. Нестабильный андервольт часто роняет систему не под нагрузкой, а в простое (Machine Check в `machine_idle`).
-3. Если демон стартует 4 раза подряд, проработав каждый раз меньше 3 минут (бутлуп), профиль тоже отключается.
-4. **Reset** возвращает 0 мВ на всех плоскостях, заводские Turbo и PL1/PL2 и отключает профиль. Отключить профиль можно и тогда, когда драйвер не загружен.
+1. After **Save** the profile is applied immediately but stays unconfirmed for 10 minutes (a countdown is shown in the menu). If the system freezes, panics or restarts during that time, the profile is **not applied** on the next boot and a warning appears in the menu.
+2. **Kernel panic after saving** (even later than 10 minutes): the daemon finds the `Kernel-*.panic` report in `/Library/Logs/DiagnosticReports` and disables the profile. Unstable undervolts often crash the system at idle rather than under load (a Machine Check in `machine_idle`).
+3. If the daemon starts 4 times in a row, each time running for less than 3 minutes (a boot loop), the profile is disabled as well.
+4. **Reset** restores 0 mV on all planes and the factory Turbo and PL1/PL2 settings, and disables the profile. The profile can be disabled even when the driver is not loaded.
 
-Если хочешь перезагрузиться сразу после сохранения, подожди окончания отсчёта. Иначе профиль придётся сохранить ещё раз. Проверяй стабильность не только под нагрузкой (Cinebench, Prime95), но и в простое и при выходе из сна.
+If you want to restart right after saving, wait for the countdown to finish; otherwise you'll have to save the profile again. Test stability not only under load (Cinebench, Prime95) but also at idle and after waking from sleep.
 
-## Требования
+## Requirements
 
-* Intel Haswell или Broadwell Mac (проверялось на MacBookPro11,3 / i7-4850HQ на macOS 13.7), macOS 12 Monterey или новее.
-* Разблокированный OC Mailbox (EFI пропатчен). Если в меню написано «OC Mailbox is not responding», смещения недоступны, но Turbo и PL работают.
-* На macOS 12 галочка «Launch at login» создаёт `~/Library/LaunchAgents/com.voltbar.app.plist`, на 13 и новее используется системный `SMAppService`.
-* Для сборки нужны Xcode или Command Line Tools, а также Kernel.framework из SDK (есть в Xcode).
-* SIP с разрешёнными неподписанными kext (OCLP это настраивает, `csr-active-config` 03080000).
+* An Intel Haswell or Broadwell Mac, macOS 12 Monterey or newer. Tested on a MacBookPro11,3 (i7-4850HQ) with macOS 13.7; not yet tested on macOS 12.
+* An unlocked OC Mailbox (patched EFI). If the menu says "OC Mailbox is not responding", voltage offsets are unavailable, but Turbo and power limits still work. On Skylake and newer the OC Mailbox is locked by Apple's firmware.
+* SIP that allows unsigned kexts (OpenCore Legacy Patcher sets this up, `csr-active-config` 03080000).
+* To build: Xcode or the Command Line Tools, plus Kernel.framework from the macOS SDK (included with Xcode).
+* On macOS 12 the "Launch at login" checkbox creates `~/Library/LaunchAgents/com.voltbar.app.plist`; on macOS 13 and newer the system `SMAppService` is used.
 
-### Драйвер: свой kext VoltBarMSR
+### Driver: the VoltBarMSR kext
 
-VoltBar больше не зависит от VoltageShift: в пакет входит свой драйвер `VoltBarMSR.kext` (исходник: `Kext/VoltBarMSR.cpp`). Пакет кладёт его в `/Library/Application Support/VoltBar/`, демон при старте загружает его через `kmutil load`.
+VoltBar does not depend on VoltageShift: the package includes its own driver, `VoltBarMSR.kext` (source: `Kext/VoltBarMSR.cpp`). The installer puts it into `/Library/Application Support/VoltBar/`, and the daemon loads it at startup with `kmutil load`.
 
-Отличия от VoltageShift.kext:
-* подключиться может только root;
-* чтение MSR идёт через `rdmsr_carefully`: несуществующий регистр даёт ошибку, а не kernel panic;
-* запись разрешена только в белый список регистров: OC Mailbox 0x150, PERF_CTL 0x199, MISC_ENABLE 0x1A0 (только бит Turbo, на всех ядрах), лимиты мощности 0x610 / 0x638 / 0x640. Зарезервированные биты и биты блокировки маскируются.
+Differences from VoltageShift.kext:
+* only root can connect to it;
+* MSR reads go through `rdmsr_carefully`: a non-existent register returns an error instead of a kernel panic;
+* writes are only allowed to a whitelist of registers: OC Mailbox 0x150, PERF_CTL 0x199, MISC_ENABLE 0x1A0 (Turbo bit only, on all cores), power limits 0x610 / 0x638 / 0x640. Reserved and lock bits are masked off.
 
-Если macOS при первой загрузке попросит разрешить расширение (Настройки → Конфиденциальность и безопасность), разреши и перезагрузись. Самый надёжный вариант — грузить kext через OpenCore: скопируй `VoltBarMSR.kext` в `EFI/OC/Kexts/` и добавь в `config.plist → Kernel → Add` запись `BundlePath = VoltBarMSR.kext`, `ExecutablePath = Contents/MacOS/VoltBarMSR`, `PlistPath = Contents/Info.plist`, `Enabled = true`. После обновления OCLP запись придётся добавить снова.
+The first time it loads, macOS may ask you to allow the extension (System Settings → Privacy & Security); allow it and restart. The most robust option is to load the kext via OpenCore: copy `VoltBarMSR.kext` to `EFI/OC/Kexts/` and add an entry to `config.plist → Kernel → Add` with `BundlePath = VoltBarMSR.kext`, `ExecutablePath = Contents/MacOS/VoltBarMSR`, `PlistPath = Contents/Info.plist`, `Enabled = true`. After an OCLP update you will have to add the entry again.
 
-Если `VoltBarMSR` не загружен, демон умеет работать и через `VoltageShift.kext` (как запасной вариант). Какой драйвер используется, видно в окне настроек и в `voltbarctl info`.
+If `VoltBarMSR.kext` is not installed, the daemon can fall back to `VoltageShift.kext`. The driver in use is shown in the settings window and in `voltbarctl info`.
 
-## Сборка и установка
+## Installation
+
+Download `VoltBar-<version>.pkg` from [Releases](https://github.com/wowodymyr/VoltBar/releases) and open it. The package is not signed with an Apple certificate, so the first time you may need to right-click it → **Open**. From the terminal: `sudo installer -pkg VoltBar-*.pkg -target /`.
+
+### Building from source
 
 ```bash
-cd ~/Projects/VoltBar
-./build.sh            # без sudo; результат: build/VoltBar-<версия>.pkg
+git clone https://github.com/wowodymyr/VoltBar.git
+cd VoltBar
+./build.sh            # no sudo needed; output: build/VoltBar-<version>.pkg
 open build/VoltBar-*.pkg
 ```
 
-Дальше обычный установщик macOS. Пакет не подписан сертификатом Apple, поэтому при первом открытии может понадобиться правый клик → «Открыть». Можно и из терминала: `sudo installer -pkg build/VoltBar-*.pkg -target /`.
+The package installs:
 
-Пакет кладёт файлы сюда:
+* `/Applications/VoltBar.app` (the app). Launch at login is a checkbox in the settings window;
+* `/Library/PrivilegedHelperTools/com.voltbar.daemon` and `/Library/LaunchDaemons/com.voltbar.daemon.plist` (the daemon);
+* `/Library/Application Support/VoltBar/VoltBarMSR.kext` (the driver);
+* `/usr/local/bin/voltbarctl` (the CLI);
+* `/Library/Application Support/VoltBar/uninstall.sh` (the uninstaller).
 
-* `/Applications/VoltBar.app` (приложение). Автозапуск при входе включается галочкой в меню;
-* `/Library/PrivilegedHelperTools/com.voltbar.daemon` и `/Library/LaunchDaemons/com.voltbar.daemon.plist` (демон);
-* `/usr/local/bin/voltbarctl` (CLI);
-* `/Library/Application Support/VoltBar/uninstall.sh` (удаление).
+If VoltageShift's `com.sicreative.VoltageShift` launch daemon is found, the installer disables it, since the two daemons would fight each other. A copy of its plist is kept in `/Library/Application Support/VoltBar/`, and `uninstall.sh` offers to restore it.
 
-Если найден launchd `com.sicreative.VoltageShift`, установщик его отключает: два демона перебивали бы друг друга. Копия plist сохраняется в `/Library/Application Support/VoltBar/`, а `uninstall.sh` предложит её вернуть.
+To uninstall: `sudo "/Library/Application Support/VoltBar/uninstall.sh"` (it resets the voltages first).
 
-Удаление: `sudo "/Library/Application Support/VoltBar/uninstall.sh"` (сначала сбрасывает напряжения).
+The app icon is generated by `Tools/make-icon.swift` into `Resources/AppIcon.icns`. To redraw it, delete that file and run `./build.sh`.
 
-Иконка приложения генерируется скриптом `Tools/make-icon.swift` в `Resources/AppIcon.icns`. Чтобы перерисовать её, удали этот файл и запусти `./build.sh`.
+## Usage
 
-## Использование
+Click ⚡ in the menu bar. The compact menu has CPU, GPU, Turbo and the buttons. The other planes, damage mode, power limits and menu bar options (CPU temperature and power next to ⚡) are in the **All settings…** window. Move the sliders and press **Save**. Values are applied immediately. The "now" label shows what is actually set in hardware. The ⚡ icon is filled while a profile is active.
 
-Нажми ⚡ в строке меню. В компактном меню есть CPU, GPU, Turbo и кнопки. Остальные плоскости, damage mode, лимиты мощности и настройки строки меню (показ температуры и мощности CPU рядом с ⚡) находятся в окне **All settings…**. Подвигай ползунки и нажми **Save**. Значения применяются сразу. Подпись «now» показывает то, что реально стоит в железе. Иконка ⚡ залита, когда профиль активен.
-
-Подбирать значения удобно с CLI. Временные настройки действуют до перезагрузки:
+The CLI is handy for finding good values. Temporary settings last until restart:
 
 ```bash
 voltbarctl info
 voltbarctl offset -80 -50          # CPU −80, GPU −50
-voltbarctl mon                     # следить за частотой, температурой, мощностью под нагрузкой
-voltbarctl save                    # всё стабильно — сделать постоянным
+voltbarctl mon                     # watch frequency, temperature and power under load
+voltbarctl save                    # everything is stable — make it permanent
 voltbarctl reset
 ```
 
-Ориентир для i7-4850HQ: обычно стабильно CPU −50…−100 мВ, Cache на том же уровне, GPU −30…−60 мВ. Каждый экземпляр CPU индивидуален, начинай с малого и проверяй под нагрузкой (Prime95, Cinebench, игры).
+Rough guide for an i7-4850HQ: CPU around −50…−85 mV, Cache at the same level, GPU −30…−60 mV. On the test machine −100 mV on CPU passed Cinebench but caused a Machine Check panic at idle. Every CPU is different: start small and test both under load (Prime95, Cinebench, games) and at idle.
 
-## Устройство
+## Architecture
 
 ```
-VoltBar.app / voltbarctl ──JSON по Unix-сокету /var/run/com.voltbar.daemon.sock (root:admin 0660)──▶ voltbard (root)
-                                                                                                 │ IOConnectCallStructMethod
-                                                                                                 ▼
-                                                                                     VoltageShift.kext (RDMSR/WRMSR)
+VoltBar.app / voltbarctl ──JSON over Unix socket /var/run/com.voltbar.daemon.sock (root:admin 0660)──▶ voltbard (root)
+                                                                                                   │ IOConnectCallScalarMethod
+                                                                                                   ▼
+                                                                                     VoltBarMSR.kext (RDMSR/WRMSR)
 ```
 
-* Подключаться к сокету могут только пользователи группы admin. Сырые `read`/`write` MSR разрешены только root (`sudo`).
-* Конфиг лежит в `/Library/Application Support/VoltBar/config.json`, служебное состояние в `state.json`, лог в `/Library/Logs/VoltBar.log`.
+* Only members of the admin group can connect to the socket. Raw MSR `read`/`write` is allowed for root only (`sudo`); with VoltBarMSR, writes are limited to the whitelist above.
+* The config is stored in `/Library/Application Support/VoltBar/config.json`, internal state in `state.json`, and the log in `/Library/Logs/VoltBar.log`.
 
-## Известные ограничения
+## Known limitations
 
-* Apple дополнительно ограничивает мощность через MMIO (MCHBAR). Если там лимит ниже, поднятие PL1/PL2 через MSR может не дать эффекта. VoltageShift в этом месте ведёт себя так же.
-* Turbo-бит пишется на том ядре, где выполняется kext, как и у VoltageShift.
+* Apple also limits power through MMIO (MCHBAR). If the limit there is lower, raising PL1/PL2 via MSR may have no effect. VoltageShift behaves the same way.
+* With the VoltageShift.kext fallback, the Turbo bit is written only on the core the kext runs on; VoltBarMSR writes it on all cores.
 
-## Лицензия
+## License
 
-GPL-3.0. VoltageShift.kext © sicreative, основан на AnVMSR (Andy Vandijck).
+GPL-3.0. VoltBarMSR.kext is part of this project. VoltageShift.kext (supported as a fallback) © sicreative, based on AnVMSR by Andy Vandijck.
