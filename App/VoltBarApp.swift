@@ -48,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         model.history.$tick.map { _ in () }
             .merge(with: model.$menuBarConfig.map { _ in () },
                    model.$features.map { _ in () },
+                   model.$chartColors.map { _ in () },
                    model.gpu.$usingIntegrated.removeDuplicates().map { _ in () },
                    model.gpu.$settings.map(\.menuBarDot).removeDuplicates().map { _ in () },
                    model.$status.map { $0?.enforcing == true }.removeDuplicates().map { _ in () },
@@ -119,7 +120,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         }
         let img = MenuBarRenderer.image(config: cfg, history: model.history,
                                         active: model.status?.enforcing == true, fanCount: model.live.fans.count,
-                                        discreteDot: discreteDot)
+                                        discreteDot: discreteDot, colors: model.chartColors,
+                                        hasDiscreteGPU: AppModel.hasDiscreteGPU)
         button.title = ""
         button.imagePosition = .imageOnly
         button.image = img

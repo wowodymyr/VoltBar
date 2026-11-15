@@ -117,6 +117,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var launchAtLogin = false
 
     // Menu bar item: what to show next to the ⚡ icon.
+    /// Chart colour of every metric (menu bar graphs and Monitor charts).
+    @Published var chartColors = MetricColors.load() { didSet { if chartColors != oldValue { chartColors.save() } } }
+
+    /// Mac has a discrete GPU (its metrics and charts are shown only then).
+    static let hasDiscreteGPU = SystemStats.hasDiscreteGPU
+
     @Published var menuSections = MenuSections.load() { didSet { if menuSections != oldValue { menuSections.save() } } }
 
     @Published var menuBarConfig = MenuBarConfig.load() {
@@ -234,6 +240,13 @@ final class AppModel: ObservableObject {
             swap = w
         }
         if let t = s?.tempC { v[.cpuTemp] = Double(t) }
+        let gpu = stats.gpuUtilization()
+        if let g = gpu.integrated { v[.gpuLoadI] = g }
+        if let g = gpu.discrete { v[.gpuLoadD] = g }
+        for sensor in s?.sensors ?? [] {
+            if sensor.key == "TCGC", let t = sensor.value { v[.gpuTempI] = t }
+            if sensor.key == "TG0D", let t = sensor.value, Self.hasDiscreteGPU { v[.gpuTempD] = t }
+        }
         if let p = s?.packageW { v[.cpuPower] = p }
         if let f = s?.freqGHz { v[.cpuFreq] = f }
         for f in s?.fans ?? [] {

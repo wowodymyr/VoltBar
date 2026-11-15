@@ -157,6 +157,7 @@ let smcSensorCandidates: [(key: String, name: String)] = [
     ("TC0F", "CPU die (filtered)"),
     ("TC0D", "CPU die"),
     ("TC0H", "CPU heatsink"),
+    ("TCGC", "Integrated GPU (PECI)"),
     ("TG0P", "GPU proximity"),
     ("TG0D", "GPU die"),
     ("TG0H", "GPU heatsink"),

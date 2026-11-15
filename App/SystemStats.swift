@@ -2,6 +2,7 @@
 
 import Foundation
 import Darwin
+import IOKit
 
 struct MemoryUsage: Equatable {
     var usedGB: Double
@@ -88,6 +89,46 @@ final class SystemStats {
         let used = (app + Double(vm.wire_count) + Double(vm.compressor_page_count)) * pageSize
         return MemoryUsage(usedGB: used / 1_073_741_824, totalGB: totalMemory / 1_073_741_824)
     }
+
+    /// GPU utilisation from the graphics drivers' PerformanceStatistics (no privileges needed).
+    /// Intel = integrated; NVIDIA / AMD = discrete. nil when that GPU isn't there or doesn't report.
+    func gpuUtilization() -> (integrated: Double?, discrete: Double?) {
+        var integrated: Double? = nil, discrete: Double? = nil
+        var it: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOAccelerator"), &it) == KERN_SUCCESS else { return (nil, nil) }
+        defer { IOObjectRelease(it) }
+        var s = IOIteratorNext(it)
+        while s != 0 {
+            var cls = [CChar](repeating: 0, count: 128)
+            IOObjectGetClass(s, &cls)
+            let name = String(cString: cls)
+            if let stats = IORegistryEntryCreateCFProperty(s, "PerformanceStatistics" as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? [String: Any],
+               let util = (stats["Device Utilization %"] ?? stats["GPU Activity(%)"]) as? NSNumber {
+                if name.hasPrefix("Intel") { integrated = util.doubleValue } else { discrete = util.doubleValue }
+            }
+            IOObjectRelease(s)
+            s = IOIteratorNext(it)
+        }
+        return (integrated, discrete)
+    }
+
+    /// Whether a discrete (non-Intel) GPU driver is present at all.
+    static let hasDiscreteGPU: Bool = {
+        var it: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOAccelerator"), &it) == KERN_SUCCESS else { return false }
+        defer { IOObjectRelease(it) }
+        var found = false
+        var s = IOIteratorNext(it)
+        while s != 0 {
+            var cls = [CChar](repeating: 0, count: 128)
+            IOObjectGetClass(s, &cls)
+            if !String(cString: cls).hasPrefix("Intel") { found = true }
+            IOObjectRelease(s)
+            s = IOIteratorNext(it)
+        }
+        return found
+    }()
 
     func swap() -> SwapUsage? {
         var usage = xsw_usage()

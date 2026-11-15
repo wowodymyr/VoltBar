@@ -101,13 +101,13 @@ Undervolting also has its own on/off switch (menu and Settings → Undervolting)
 
 ## Monitor and menu bar
 
-**Monitor…** in the menu opens live charts (1, 2 or 5 minutes) of CPU load, per-thread load, frequency, package power and temperature, memory, swap and fan speeds — a lightweight alternative to Intel Power Gadget. History is recorded in the background, so the charts are filled as soon as the window opens.
+**Monitor…** in the menu opens live charts (1, 2 or 5 minutes) of CPU load, per-thread load, frequency, package power and temperature, integrated and discrete GPU load and temperature (the discrete ones only on Macs that have one), memory, swap and fan speeds — a lightweight alternative to Intel Power Gadget. History is recorded in the background, so the charts are filled as soon as the window opens.
 
 * **Smooth** (on by default): curves are interpolated and charts scroll continuously between samples; the frame rate adapts to the time span (≈20/10/4 fps) to keep CPU use low.
 * **Charts** menu: show or hide each chart, including **CPU Threads** (every logical CPU as a mini chart in one card), and reset the layout.
 * Charts sit in a two-column grid and are 1 or 2 cells wide and 1 or 2 cells tall: drag a chart to move it, drag its corner handle right/left and down/up to change its size (applied on release). The layout is remembered; the window scrolls if it doesn't fit the screen.
 
-**Settings → Menu Bar** chooses which sections the menu shows (metrics, profile, undervolting, fans, graphics, Monitor button — a hidden section keeps working) and customises the status item: the ⚡ icon can be monochrome, yellow or hidden; separators can be drawn between items; every value has a fixed width, so the item never jumps as numbers change; and every metric (CPU load, temperature, power, frequency, memory, swap, each fan) can be shown as a value, a mini graph (labelled on its left), both, or not at all.
+**Settings → Menu Bar** chooses which sections the menu shows (metrics, profile, undervolting, fans, graphics, Monitor button — a hidden section keeps working) and customises the status item: the ⚡ icon can be monochrome, yellow or hidden; separators can be drawn between items; every value has a fixed width, so the item never jumps as numbers change; and every metric (CPU load, temperature, power, frequency, GPU load and temperature, memory, swap, each fan) can be shown as a value, a mini graph (labelled on its left), both, or not at all. Each metric has its own colour (the swatch next to it, or right-click a chart in Monitor); the same colour is used in Monitor and, with **Coloured graphs** on, in the menu bar.
 
 ## Fan control
 

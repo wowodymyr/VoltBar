@@ -694,8 +694,9 @@ struct MenuBarSettings: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var live: LiveMetrics
 
-    private var metrics: [Metric] {
-        [.cpuLoad, .cpuTemp, .cpuPower, .cpuFreq, .memory, .swap] + live.fans.compactMap { Metric.fan($0.index) }
+    /// Fans without their changing readings, so the rows below don't redraw every second.
+    private var fanList: [FanInfo] {
+        live.fans.map { FanInfo(index: $0.index, name: $0.name, rpm: 0, minRPM: 0, maxRPM: 0, targetRPM: nil, controlled: false) }
     }
 
     var body: some View {
@@ -712,22 +713,15 @@ struct MenuBarSettings: View {
                 .frame(width: 260)
             }
             if model.features.monitoring {
-            Toggle("Separators between items", isOn: Binding(get: { model.menuBarConfig.separators },
-                                                             set: { model.menuBarConfig.separators = $0 }))
-                .toggleStyle(.checkbox)
-            ForEach(metrics, id: \.self) { m in
-                HStack {
-                    Text(m.title(fans: live.fans))
-                    Spacer()
-                    Picker(m.title(fans: live.fans), selection: Binding(get: { model.menuBarConfig.display(m) },
-                                                                        set: { model.menuBarConfig.items[m] = $0 })) {
-                        ForEach(MenuBarDisplay.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 260)
+                HStack(spacing: 16) {
+                    Toggle("Separators between items", isOn: Binding(get: { model.menuBarConfig.separators },
+                                                                     set: { model.menuBarConfig.separators = $0 }))
+                    Toggle("Coloured graphs", isOn: Binding(get: { model.menuBarConfig.coloredGraphs },
+                                                            set: { model.menuBarConfig.coloredGraphs = $0 }))
+                        .help("Draw each graph in its own colour (the dot next to the metric)")
                 }
-            }
+                .toggleStyle(.checkbox)
+                MenuBarMetricGrid(fans: fanList, config: model.menuBarConfig, colors: model.chartColors).equatable()
             } else {
                 Text("Turn on Monitoring to show live values and graphs in the menu bar.").font(.caption)
             }
@@ -736,4 +730,153 @@ struct MenuBarSettings: View {
             }
         }
     }
+}
+
+/// Two columns of metrics: colour dot, name and how it's shown.
+struct MenuBarMetricGrid: View, Equatable {
+    let fans: [FanInfo]
+    let config: MenuBarConfig
+    let colors: MetricColors
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.fans == b.fans && a.colors == b.colors && a.config.items == b.config.items
+    }
+
+    private var metrics: [Metric] {
+        [.cpuLoad, .cpuTemp, .cpuPower, .cpuFreq, .gpuLoadI, .gpuLoadD, .gpuTempI, .gpuTempD, .memory, .swap]
+            .filter { AppModel.hasDiscreteGPU || !$0.needsDiscreteGPU }
+            + fans.compactMap { Metric.fan($0.index) }
+    }
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 20), GridItem(.flexible())], alignment: .leading, spacing: 6) {
+            ForEach(metrics, id: \.self) { m in
+                HStack(spacing: 6) {
+                    ColorSwatchMenu(metric: m, color: colors.color(m)).frame(width: 14, height: 14)
+                    Text(m.title(fans: fans)).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Picker(m.title(fans: fans), selection: Binding(get: { config.display(m) },
+                                                                   set: { AppModel.shared?.menuBarConfig.items[m] = $0 })) {
+                        ForEach(MenuBarDisplay.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Chart colour menus (AppKit: SwiftUI menus close whenever the live values refresh)
+
+/// Menu item that runs a closure; it is its own target (the menu keeps it alive).
+final class ClosureMenuItem: NSMenuItem {
+    private let handler: () -> Void
+    init(_ title: String, image: NSImage? = nil, checked: Bool = false, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(fire), keyEquivalent: "")
+        target = self
+        self.image = image
+        state = checked ? .on : .off
+    }
+    required init(coder: NSCoder) { fatalError() }
+    @objc private func fire() { handler() }
+}
+
+enum ColorMenus {
+    private static var swatches: [ChartColor: NSImage] = [:]
+
+    /// A coloured circle (non-template, cached).
+    static func swatch(_ c: ChartColor) -> NSImage {
+        if let i = swatches[c] { return i }
+        let nsColor = c.nsColor
+        let img = NSImage(size: NSSize(width: 12, height: 12), flipped: false) { r in
+            let p = NSBezierPath(ovalIn: r.insetBy(dx: 0.5, dy: 0.5))
+            nsColor.setFill(); p.fill()
+            NSColor.black.withAlphaComponent(0.25).setStroke(); p.lineWidth = 0.5; p.stroke()
+            return true
+        }
+        img.isTemplate = false
+        swatches[c] = img
+        return img
+    }
+
+    private static func items(current: ChartColor, set: @escaping (ChartColor) -> Void) -> [NSMenuItem] {
+        ChartColor.allCases.map { c in ClosureMenuItem(c.title, image: swatch(c), checked: c == current) { set(c) } }
+    }
+
+    /// One metric: the colours directly. Several: a "<metric> Colour" submenu each.
+    static func menu(_ metrics: [Metric], fans: [FanInfo]) -> NSMenu {
+        let menu = NSMenu()
+        guard let model = AppModel.shared else { return menu }
+        let setter: (Metric) -> (ChartColor) -> Void = { m in { c in model.chartColors.map[m.rawValue] = c } }
+        if metrics.count == 1, let m = metrics.first {
+            items(current: model.chartColors.color(m), set: setter(m)).forEach(menu.addItem)
+        } else {
+            for m in metrics {
+                let item = NSMenuItem(title: "\(m.title(fans: fans)) Colour", action: nil, keyEquivalent: "")
+                item.image = swatch(model.chartColors.color(m))
+                let sub = NSMenu()
+                items(current: model.chartColors.color(m), set: setter(m)).forEach(sub.addItem)
+                item.submenu = sub
+                menu.addItem(item)
+            }
+        }
+        return menu
+    }
+}
+
+/// A small coloured circle that opens the colour menu for one metric.
+struct ColorSwatchMenu: NSViewRepresentable {
+    let metric: Metric
+    let color: ChartColor
+
+    func makeNSView(context: Context) -> NSButton {
+        let b = NSButton(image: ColorMenus.swatch(color), target: context.coordinator, action: #selector(Coordinator.click(_:)))
+        b.isBordered = false
+        b.imagePosition = .imageOnly
+        b.toolTip = "Graph colour"
+        b.setContentHuggingPriority(.required, for: .horizontal)
+        return b
+    }
+
+    func updateNSView(_ b: NSButton, context: Context) {
+        context.coordinator.metric = metric
+        if context.coordinator.color != color { context.coordinator.color = color; b.image = ColorMenus.swatch(color) }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(metric: metric, color: color) }
+
+    final class Coordinator: NSObject {
+        var metric: Metric, color: ChartColor
+        init(metric: Metric, color: ChartColor) { self.metric = metric; self.color = color }
+        @objc func click(_ b: NSButton) {
+            ColorMenus.menu([metric], fans: []).popUp(positioning: nil, at: NSPoint(x: 0, y: b.bounds.height + 4), in: b)
+        }
+    }
+}
+
+/// Transparent overlay that only catches right-clicks (and control-clicks) and shows a colour menu.
+struct ColorContextMenu: NSViewRepresentable {
+    let metrics: [Metric]
+    let fans: [FanInfo]
+
+    final class View: NSView {
+        var metrics: [Metric] = []
+        var fans: [FanInfo] = []
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard let e = NSApp.currentEvent else { return nil }
+            let right = e.type == .rightMouseDown || (e.type == .leftMouseDown && e.modifierFlags.contains(.control))
+            return right ? super.hitTest(point) : nil
+        }
+        override func rightMouseDown(with e: NSEvent) { show(e) }
+        override func mouseDown(with e: NSEvent) { show(e) }
+        private func show(_ e: NSEvent) {
+            guard !metrics.isEmpty else { return }
+            NSMenu.popUpContextMenu(ColorMenus.menu(metrics, fans: fans), with: e, for: self)
+        }
+    }
+
+    func makeNSView(context: Context) -> View { View() }
+    func updateNSView(_ v: View, context: Context) { v.metrics = metrics; v.fans = fans }
 }

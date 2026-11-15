@@ -2,11 +2,27 @@
 
 import AppKit
 import Combine
+import SwiftUI
 
 // MARK: - Metrics
 
 enum Metric: String, Codable, CaseIterable, Hashable {
-    case cpuLoad, cpuTemp, cpuPower, cpuFreq, memory, swap, fan0, fan1, fan2, fan3
+    case cpuLoad, cpuTemp, cpuPower, cpuFreq
+    case gpuLoadI, gpuLoadD, gpuTempI, gpuTempD      // integrated / discrete GPU
+    case memory, swap, fan0, fan1, fan2, fan3
+
+    /// Only meaningful on Macs with a discrete GPU.
+    var needsDiscreteGPU: Bool { self == .gpuLoadD || self == .gpuTempD }
+
+    /// Default chart colour; second series of shared charts get a contrasting one.
+    var defaultColor: ChartColor {
+        switch self {
+        case .fan1, .gpuLoadD, .gpuTempD: return .orange
+        case .fan2: return .green
+        case .fan3: return .pink
+        default: return .accent
+        }
+    }
 
     var fanIndex: Int? {
         switch self {
@@ -29,6 +45,10 @@ enum Metric: String, Codable, CaseIterable, Hashable {
         case .cpuFreq: return "CPU Frequency"
         case .memory: return "Memory"
         case .swap: return "Swap"
+        case .gpuLoadI: return "Integrated GPU Load"
+        case .gpuLoadD: return "Discrete GPU Load"
+        case .gpuTempI: return "Integrated GPU Temperature"
+        case .gpuTempD: return "Discrete GPU Temperature"
         default: return fans.first { $0.index == fanIndex }?.name ?? "Fan \((fanIndex ?? 0) + 1)"
         }
     }
@@ -42,6 +62,10 @@ enum Metric: String, Codable, CaseIterable, Hashable {
         case .cpuFreq: return "FREQ"
         case .memory: return "RAM"
         case .swap: return "SWAP"
+        case .gpuLoadI: return "IGPU"
+        case .gpuLoadD: return "DGPU"
+        case .gpuTempI: return "IGPU°"
+        case .gpuTempD: return "DGPU°"
         default: return "FAN\((fanIndex ?? 0) + 1)"
         }
     }
@@ -49,8 +73,8 @@ enum Metric: String, Codable, CaseIterable, Hashable {
     /// Widest value this metric can show in the menu bar; its width is reserved so the item never jumps.
     var widestCompactValue: String {
         switch self {
-        case .cpuLoad, .memory: return "100%"
-        case .cpuTemp: return "100°"
+        case .cpuLoad, .memory, .gpuLoadI, .gpuLoadD: return "100%"
+        case .cpuTemp, .gpuTempI, .gpuTempD: return "100°"
         case .cpuPower: return "88.8W"
         case .cpuFreq, .swap: return "8.8G"
         default: return "8888"
@@ -60,14 +84,52 @@ enum Metric: String, Codable, CaseIterable, Hashable {
     func format(_ v: Double?, compact: Bool) -> String {
         guard let v = v else { return "–" }
         switch self {
-        case .cpuLoad, .memory: return String(format: "%.0f%%", v)
-        case .cpuTemp: return String(format: compact ? "%.0f°" : "%.0f °C", v)
+        case .cpuLoad, .memory, .gpuLoadI, .gpuLoadD: return String(format: "%.0f%%", v)
+        case .cpuTemp, .gpuTempI, .gpuTempD: return String(format: compact ? "%.0f°" : "%.0f °C", v)
         case .cpuPower: return String(format: compact ? "%.1fW" : "%.1f W", v)
         case .cpuFreq: return String(format: compact ? "%.1fG" : "%.2f GHz", v)
         case .swap: return String(format: compact ? "%.1fG" : "%.2f GB", v)
         default: return String(format: compact ? "%.0f" : "%.0f rpm", v)
         }
     }
+}
+
+// MARK: - Chart colours (shared by the menu bar and the Monitor)
+
+enum ChartColor: String, Codable, CaseIterable {
+    case accent, blue, green, orange, red, purple, pink, yellow, teal, gray
+
+    var title: String { self == .accent ? "System Accent" : rawValue.capitalized }
+
+    var nsColor: NSColor {
+        switch self {
+        case .accent: return .controlAccentColor
+        case .blue: return .systemBlue
+        case .green: return .systemGreen
+        case .orange: return .systemOrange
+        case .red: return .systemRed
+        case .purple: return .systemPurple
+        case .pink: return .systemPink
+        case .yellow: return .systemYellow
+        case .teal: return .systemTeal
+        case .gray: return .systemGray
+        }
+    }
+
+    var color: Color { Color(nsColor: nsColor) }
+}
+
+struct MetricColors: Codable, Equatable {
+    var map: [String: ChartColor] = [:]
+
+    func color(_ m: Metric) -> ChartColor { map[m.rawValue] ?? m.defaultColor }
+
+    static let key = "chartColors"
+    static func load() -> MetricColors {
+        guard let d = UserDefaults.standard.data(forKey: key), let c = try? JSONDecoder().decode(MetricColors.self, from: d) else { return MetricColors() }
+        return c
+    }
+    func save() { if let d = try? JSONEncoder().encode(self) { UserDefaults.standard.set(d, forKey: Self.key) } }
 }
 
 // MARK: - History
@@ -125,8 +187,8 @@ final class MetricsHistory: ObservableObject {
     /// Range to draw `m` in: fixed for percentages/temperature, otherwise grows with the data.
     func range(_ m: Metric, last n: Int) -> ClosedRange<Double> {
         switch m {
-        case .cpuLoad, .memory: return 0...100
-        case .cpuTemp: return 30...100
+        case .cpuLoad, .memory, .gpuLoadI, .gpuLoadD: return 0...100
+        case .cpuTemp, .gpuTempI, .gpuTempD: return 30...100
         default:
             if let r = ranges[m] { return r }
             let peak = values(m, last: n).compactMap { $0 }.max() ?? 1
@@ -171,6 +233,18 @@ struct MenuBarConfig: Codable, Equatable {
     var icon: MenuBarIconStyle = .monochrome
     var separators = false
     var items: [Metric: MenuBarDisplay] = [:]
+    /// Graphs in their chart colours instead of the monochrome menu bar style.
+    var coloredGraphs = false
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        icon = try c.decodeIfPresent(MenuBarIconStyle.self, forKey: .icon) ?? .monochrome
+        separators = try c.decodeIfPresent(Bool.self, forKey: .separators) ?? false
+        items = (try? c.decodeIfPresent([Metric: MenuBarDisplay].self, forKey: .items)) ?? [:]
+        coloredGraphs = try c.decodeIfPresent(Bool.self, forKey: .coloredGraphs) ?? false
+    }
 
     func display(_ m: Metric) -> MenuBarDisplay { items[m] ?? .off }
     var hasItems: Bool { items.values.contains { $0 != .off } }
@@ -204,9 +278,10 @@ enum MenuBarRenderer {
 
     /// Draws the whole status item: optional bolt, then each enabled metric (label + value and/or graph).
     static func image(config: MenuBarConfig, history: MetricsHistory, active: Bool, fanCount: Int,
-                      discreteDot: Bool = false) -> NSImage {
+                      discreteDot: Bool = false, colors: MetricColors = MetricColors(), hasDiscreteGPU: Bool = true) -> NSImage {
         let items = Metric.allCases
             .filter { $0.fanIndex.map { $0 < fanCount } ?? true }
+            .filter { hasDiscreteGPU || !$0.needsDiscreteGPU }
             .map { Item(metric: $0, display: config.display($0)) }
             .filter { $0.display != .off }
         // Never leave the status item empty.
@@ -249,7 +324,8 @@ enum MenuBarRenderer {
         for (i, it) in items.enumerated() { width += ((i == 0 && !showIcon) ? 0 : gap) + itemWidth(it) }
         width = max(width, 16)
 
-        let isTemplate = config.icon != .yellow
+        let colored = config.coloredGraphs && items.contains { $0.display == .graph || $0.display == .both }
+        let isTemplate = config.icon != .yellow && !colored
         let img = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
             let fg = isTemplate ? NSColor.black : NSColor.labelColor
             var x: CGFloat = 0
@@ -303,7 +379,8 @@ enum MenuBarRenderer {
                     label.draw(at: NSPoint(x: x, y: (height - lh) / 2),
                                withAttributes: [.font: sideLabelFont, .foregroundColor: fg.withAlphaComponent(0.85)])
                     x += lw + 3
-                    drawGraph(it.metric, history: history, in: NSRect(x: x, y: 2, width: graphWidth, height: height - 4), color: fg)
+                    drawGraph(it.metric, history: history, in: NSRect(x: x, y: 2, width: graphWidth, height: height - 4),
+                              color: fg, bars: colored ? colors.color(it.metric).nsColor : nil)
                     x += graphWidth
                 }
                 if it.display == .both {
@@ -328,7 +405,7 @@ enum MenuBarRenderer {
         return img
     }
 
-    private static func drawGraph(_ m: Metric, history: MetricsHistory, in r: NSRect, color: NSColor) {
+    private static func drawGraph(_ m: Metric, history: MetricsHistory, in r: NSRect, color: NSColor, bars: NSColor? = nil) {
         let path = NSBezierPath(roundedRect: r, xRadius: 2, yRadius: 2)
         color.withAlphaComponent(0.12).setFill()
         path.fill()
@@ -339,7 +416,7 @@ enum MenuBarRenderer {
         let range = history.range(m, last: graphSamples)
         let span = max(0.0001, range.upperBound - range.lowerBound)
         let barW = (r.width - 2) / CGFloat(graphSamples)
-        color.withAlphaComponent(0.9).setFill()
+        (bars ?? color.withAlphaComponent(0.9)).setFill()
         let offset = graphSamples - vals.count
         for (i, v) in vals.enumerated() {
             guard let v = v else { continue }

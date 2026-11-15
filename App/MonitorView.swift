@@ -7,7 +7,7 @@ import AppKit
 // MARK: - Layout model (persisted)
 
 enum ChartID: String, Codable, CaseIterable, Identifiable {
-    case cpuLoad, cpuThreads, cpuFreq, cpuPower, cpuTemp, memory, swap, fans
+    case cpuLoad, cpuThreads, cpuFreq, cpuPower, cpuTemp, gpuLoad, gpuTemp, memory, swap, fans
     var id: String { rawValue }
 
     var title: String {
@@ -17,9 +17,22 @@ enum ChartID: String, Codable, CaseIterable, Identifiable {
         case .cpuFreq: return "CPU Frequency"
         case .cpuPower: return "CPU Power"
         case .cpuTemp: return "CPU Temperature"
+        case .gpuLoad: return "GPU Load"
+        case .gpuTemp: return "GPU Temperature"
         case .memory: return "Memory"
         case .swap: return "Swap"
         case .fans: return "Fans"
+        }
+    }
+
+    /// Metrics drawn in this chart (each is a line with its own colour).
+    func metrics(fans: [FanInfo]) -> [Metric] {
+        switch self {
+        case .cpuThreads: return [.cpuLoad]
+        case .fans: return fans.compactMap { Metric.fan($0.index) }
+        case .gpuLoad: return AppModel.hasDiscreteGPU ? [.gpuLoadI, .gpuLoadD] : [.gpuLoadI]
+        case .gpuTemp: return AppModel.hasDiscreteGPU ? [.gpuTempI, .gpuTempD] : [.gpuTempI]
+        default: return metric.map { [$0] } ?? []
         }
     }
 
@@ -31,7 +44,7 @@ enum ChartID: String, Codable, CaseIterable, Identifiable {
         case .cpuTemp: return .cpuTemp
         case .memory: return .memory
         case .swap: return .swap
-        case .cpuThreads, .fans: return nil
+        case .cpuThreads, .fans, .gpuLoad, .gpuTemp: return nil
         }
     }
 }
@@ -181,6 +194,7 @@ struct MonitorView: View {
             .overlay(alignment: .bottomTrailing) {
                 ResizeHandle(item: item) { change in model.updateChart(item.id, change) }
             }
+            .overlay(ColorContextMenu(metrics: item.id.metrics(fans: live.fans), fans: live.fans))
             .opacity(dragging == item.id ? 0.5 : 1)
             .onDrag {
                 dragging = item.id
@@ -195,7 +209,8 @@ struct MonitorView: View {
                                  interval: history.sampleInterval, paused: !model.monitorOnScreen)
         switch item.id {
         case .cpuThreads:
-            ThreadsCard(history: history, samples: window, span: item.span, timing: timing)
+            ThreadsCard(history: history, samples: window, span: item.span, timing: timing,
+                        color: model.chartColors.color(.cpuLoad).color)
         case .fans:
             let fanMetrics = live.fans.compactMap { Metric.fan($0.index) }
             let lo = live.fans.map(\.minRPM).min() ?? 0
@@ -203,16 +218,27 @@ struct MonitorView: View {
             ChartCard(title: "Fans",
                       subtitle: live.fans.isEmpty ? "No fans reported" : (model.fanDraft.enabled ? "VoltBar fan control on" : "Controlled by macOS"),
                       value: live.fans.isEmpty ? "—" : live.fans.map { "\(Int($0.rpm))" }.joined(separator: " / ") + " rpm",
-                      series: fanMetrics.enumerated().map { i, m in
+                      series: fanMetrics.map { m in
                           ChartSeries(name: m.title(fans: live.fans), values: history.values(m, last: window),
-                                      color: [Color.accentColor, .orange, .green, .pink][i % 4])
+                                      color: model.chartColors.color(m).color)
                       },
                       range: (lo * 0.9)...max(lo + 1, hi), unit: "rpm", samples: window, timing: timing)
+        case .gpuLoad, .gpuTemp:
+            let ms = item.id.metrics(fans: live.fans)
+            let isTemp = item.id == .gpuTemp
+            ChartCard(title: item.id.title,
+                      subtitle: ms.count > 1 ? "Integrated and discrete GPU" : "Integrated GPU",
+                      value: ms.map { $0.format(history.latest($0), compact: true) }.joined(separator: " / "),
+                      series: ms.map { m in
+                          ChartSeries(name: m == .gpuLoadI || m == .gpuTempI ? "Integrated" : "Discrete",
+                                      values: history.values(m, last: window), color: model.chartColors.color(m).color)
+                      },
+                      range: isTemp ? 30...100 : 0...100, unit: isTemp ? "°C" : "%", samples: window, timing: timing)
         default:
             let m = item.id.metric!
             ChartCard(title: item.id.title, subtitle: subtitle(m),
                       value: m.format(history.latest(m), compact: false),
-                      series: [ChartSeries(name: "", values: history.values(m, last: window), color: .accentColor)],
+                      series: [ChartSeries(name: "", values: history.values(m, last: window), color: model.chartColors.color(m).color)],
                       range: history.range(m, last: window), unit: unit(m), samples: window, timing: timing)
         }
     }
@@ -382,6 +408,7 @@ struct ThreadsCard: View {
     let samples: Int
     let span: Int
     let timing: ChartTiming
+    var color: Color = .accentColor
 
     var body: some View {
         let n = history.threads.count
@@ -410,7 +437,7 @@ struct ThreadsCard: View {
                                 Text((history.threads[i].last ?? nil).map { String(format: "%.0f%%", $0) } ?? "—")
                                     .font(.caption2).monospacedDigit()
                             }
-                            LineChart(series: [ChartSeries(name: "", values: history.threadValues(i, last: samples), color: .accentColor)],
+                            LineChart(series: [ChartSeries(name: "", values: history.threadValues(i, last: samples), color: color)],
                                       range: 0...100, samples: samples, timing: timing, gridLines: false, animate: false)
                                 .frame(maxHeight: .infinity)
                         }
