@@ -1,14 +1,50 @@
-# VoltBar
+<p align="center">
+  <img src="docs/icon.png" width="128" height="128" alt="VoltBar icon">
+</p>
 
-VoltBar is a menu bar undervolting tool for Intel Macs — a full-featured, GUI-driven alternative to [VoltageShift](https://github.com/sicreative/VoltageShift).
-It ships its own MSR driver (`VoltBarMSR.kext`) and rewrites all the user-space logic from scratch:
+<h1 align="center">VoltBar</h1>
 
-* **Menu bar app** (⚡ icon): voltage offset sliders for six planes (CPU, GPU, CPU Cache, System Agent, Analog I/O, Digital I/O), Turbo Boost, PL1/PL2, CPU model, live temperature, frequency and package power, **Save** and **Reset** buttons. Optionally shows CPU temperature and power right in the menu bar.
+<p align="center">
+  <b>An alternative to <a href="https://github.com/sicreative/VoltageShift">VoltageShift</a> for Intel Macs — with fan control and hardware monitoring built in.</b><br>
+  Undervolting, fan curves and live CPU / memory / fan charts, all from the menu bar.
+</p>
+
+<p align="center">
+  <a href="https://github.com/wowodymyr/VoltBar/releases/latest"><b>Download the latest release</b></a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/menubar.png" alt="VoltBar in the menu bar" width="345">
+</p>
+
+VoltBar does what VoltageShift does — CPU/GPU/cache voltage offsets, Turbo Boost and power limits — but as a native menu bar app with a safety net, and it replaces two more utilities on the way: **fan control** (like Macs Fan Control: fixed speeds, linear rules or curves per fan, driven by any temperature sensor) and **hardware monitoring** (like Intel Power Gadget: live charts of CPU load per thread, frequency, package power, temperature, memory, swap and fan speeds). It ships its own MSR driver (`VoltBarMSR.kext`), so VoltageShift isn't needed.
+
+<p align="center">
+  <img src="docs/screenshots/menu.png" alt="Menu" width="400">
+  <img src="docs/screenshots/monitor.png" alt="Monitor window" width="430">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/settings-fans.png" alt="Fan control" width="600">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/settings-undervolting.png" alt="Undervolting settings" width="600">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/settings-general.png" alt="General settings: features and menu bar" width="360">
+</p>
+
+### At a glance
+
+* **Menu bar app** (⚡): CPU and GPU offsets, Turbo Boost, undervolting and fan control switches, fan speeds, live temperature, frequency and package power. Settings window with all six voltage planes, power limits, per-fan modes, menu bar layout and feature modules.
 * **Root daemon** `com.voltbar.daemon` (launchd) applies the profile:
   * at boot;
   * after waking from sleep or hibernation (subscribes to `IORegisterForSystemPower`, applies after 2 s and re-checks after 15 s);
   * every 30 s it checks that the values are still in place and restores them if not. VoltageShift does this once every 160 minutes by default.
-* **CLI** `voltbarctl` with `info`, `mon`, `offset`, `turbo`, `power`, `read`, `write` and `--damage`, just like voltageshift.
+* **Fan control** through the SMC and **monitoring** with a background history (see below).
+* **CLI** `voltbarctl` with `info`, `mon`, `offset`, `turbo`, `power`, `fans`, `read`, `write` and `--damage`, just like voltageshift.
 
 > ⚠️ This is a tool for advanced users. Too deep an undervolt causes freezes and kernel panics; raising the voltage (positive offset) can damage the CPU.
 
