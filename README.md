@@ -14,26 +14,32 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/menubar.png" alt="VoltBar in the menu bar" width="345">
+  <img src="docs/screenshots/menubar.png" alt="VoltBar in the menu bar" width="342">
 </p>
 
 VoltBar does what VoltageShift does — CPU/GPU/cache voltage offsets, Turbo Boost and power limits — but as a native menu bar app with a safety net, and it replaces two more utilities on the way: **fan control** (like Macs Fan Control: fixed speeds, linear rules or curves per fan, driven by any temperature sensor) and **hardware monitoring** (like Intel Power Gadget: live charts of CPU load per thread, frequency, package power, temperature, memory, swap and fan speeds). It ships its own MSR driver (`VoltBarMSR.kext`), so VoltageShift isn't needed.
 
 <p align="center">
-  <img src="docs/screenshots/menu.png" alt="Menu" width="400">
-  <img src="docs/screenshots/monitor.png" alt="Monitor window" width="430">
+  <img src="docs/screenshots/menu.png" alt="Menu" width="380">
+  <img src="docs/screenshots/monitor.png" alt="Monitor window" width="450">
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/settings-fans.png" alt="Fan control" width="600">
+  <img src="docs/screenshots/settings-undervolting.png" alt="Undervolting settings" width="620">
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/settings-undervolting.png" alt="Undervolting settings" width="600">
+  <img src="docs/screenshots/settings-fans.png" alt="Fan control" width="620">
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/settings-general.png" alt="General settings: features and menu bar" width="360">
+  <img src="docs/screenshots/settings-graphics.png" alt="Graphics switching" width="410">
+  <img src="docs/screenshots/settings-profiles.png" alt="Profiles and automatic switching" width="420">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/settings-menubar.png" alt="Menu bar and menu settings" width="380">
+  <img src="docs/screenshots/settings-general.png" alt="General settings: feature modules" width="380">
 </p>
 
 ### At a glance
