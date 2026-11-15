@@ -394,6 +394,11 @@ struct CompactMenuView: View {
                 Divider()
             }
 
+            if model.features.gpu && model.gpu.available {
+                GPUMenuSection(gpu: model.gpu, openSettings: { openSettings(.gpu) })
+                Divider()
+            }
+
             if !model.features.undervolting && !model.features.fans {
                 Text("Undervolting and fan control are turned off. Turn them on in Settings → General.")
                     .font(.callout)
@@ -422,12 +427,13 @@ struct CompactMenuView: View {
 // MARK: - Settings window (tabs: Undervolting, Fans, General)
 
 enum SettingsTab: Int, CaseIterable {
-    case undervolting, fans, general
+    case undervolting, fans, gpu, general
 
     var title: String {
         switch self {
         case .undervolting: return "Undervolting"
         case .fans: return "Fans"
+        case .gpu: return "Graphics"
         case .general: return "General"
         }
     }
@@ -436,6 +442,7 @@ enum SettingsTab: Int, CaseIterable {
         switch self {
         case .undervolting: return "bolt"
         case .fans: return fanSymbolName
+        case .gpu: return gpuSymbolName
         case .general: return "gearshape"
         }
     }
@@ -507,6 +514,11 @@ struct GeneralSettingsView: View {
                 FeatureToggle(symbol: fanSymbolName, title: "Fan Control",
                               detail: "Custom fan modes. Off: macOS controls the fans.",
                               isOn: $model.features.fans)
+                if model.gpu.available {
+                    FeatureToggle(symbol: gpuSymbolName, title: "Graphics Switching",
+                                  detail: "Integrated / dynamic / discrete GPU. Off: macOS decides (dynamic).",
+                                  isOn: $model.features.gpu)
+                }
                 FeatureToggle(symbol: "chart.xyaxis.line", title: "Monitoring",
                               detail: "Monitor window and live values in the menu bar. Off: nothing is sampled.",
                               isOn: $model.features.monitoring)

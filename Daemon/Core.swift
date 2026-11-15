@@ -11,7 +11,7 @@ import Foundation
 import IOKit
 import IOKit.pwr_mgt
 
-let daemonVersion = "2.0.1"
+let daemonVersion = "2.1"
 
 // MARK: - Хранилище
 

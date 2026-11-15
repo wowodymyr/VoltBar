@@ -48,10 +48,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         model.history.$tick.map { _ in () }
             .merge(with: model.$menuBarConfig.map { _ in () },
                    model.$features.map { _ in () },
+                   model.gpu.$usingIntegrated.removeDuplicates().map { _ in () },
+                   model.gpu.$settings.map(\.menuBarDot).removeDuplicates().map { _ in () },
                    model.$status.map { $0?.enforcing == true }.removeDuplicates().map { _ in () },
                    model.live.$fans.map { $0.count }.removeDuplicates().map { _ in () })
             .receive(on: RunLoop.main)
             .sink { [weak self] in self?.renderStatusItem() }
+            .store(in: &cancellables)
+
+        // gSwitch-compatible launch arguments: --integrated, --dynamic, --discrete.
+        let args = CommandLine.arguments
+        if let mode = GPUMode.allCases.first(where: { args.contains("--\($0.rawValue)") }), model.features.gpu {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.gpu.apply(mode, confirmed: true) }
+        }
+
+        // Show or hide settings tabs when modules are switched on/off in General.
+        model.$features.removeDuplicates().dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                self.settings?.setTabs(self.enabledTabs())
+            }
             .store(in: &cancellables)
 
         // Monitoring switched off: close its window.
@@ -78,12 +95,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         if let s = settings, s.window.isVisible { s.refitCurrent() }
     }
 
+    private var lastStatusItemKey = ""
+
+    /// gSwitch-style indicator: a dot on the icon while the discrete GPU is active.
+    private var discreteDot: Bool {
+        model.features.gpu && model.gpu.available && model.gpu.settings.menuBarDot && !model.gpu.usingIntegrated
+    }
+
     private func renderStatusItem() {
         guard let button = statusItem.button else { return }
         var cfg = model.menuBarConfig
         if !model.features.monitoring { cfg.items = [:] }   // monitoring off: icon only
+        // Skip redraws that wouldn't change a pixel (graphs change with every sample, values only sometimes).
+        let active = model.status?.enforcing == true
+        if !cfg.hasGraphs {
+            let values = Metric.allCases.filter { cfg.display($0) != .off }
+                .map { $0.format(model.history.latest($0), compact: true) }.joined(separator: "|")
+            let key = "\(active)|\(discreteDot)|\(cfg.icon)|\(cfg.separators)|\(cfg.items.count)|\(model.live.fans.count)|" + values
+            if key == lastStatusItemKey { return }
+            lastStatusItemKey = key
+        } else {
+            lastStatusItemKey = ""
+        }
         let img = MenuBarRenderer.image(config: cfg, history: model.history,
-                                        active: model.status?.enforcing == true, fanCount: model.live.fans.count)
+                                        active: model.status?.enforcing == true, fanCount: model.live.fans.count,
+                                        discreteDot: discreteDot)
         button.title = ""
         button.imagePosition = .imageOnly
         button.image = img
@@ -150,19 +186,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
                 switch t {
                 case .undervolting: return AnyView(UndervoltSettingsView().environmentObject(model))
                 case .fans: return AnyView(FansSettingsView(live: model.live).environmentObject(model))
+                case .gpu: return AnyView(GPUSettingsView(gpu: model.gpu))
                 case .general: return AnyView(GeneralSettingsView().environmentObject(model))
                 }
             }
             s.window.delegate = self
             settings = s
-            // Show or hide tabs when modules are switched on/off in General.
-            model.$features.removeDuplicates().dropFirst()
-                .receive(on: RunLoop.main)
-                .sink { [weak self] _ in
-                    guard let self = self else { return }
-                    self.settings?.setTabs(self.enabledTabs())
-                }
-                .store(in: &cancellables)
         }
         let wasVisible = settingsWindow?.isVisible ?? false
         settings?.select(tab)
@@ -177,17 +206,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             switch $0 {
             case .undervolting: return model.features.undervolting
             case .fans: return model.features.fans
+            case .gpu: return model.features.gpu && model.gpu.available
             case .general: return true
             }
         }
     }
 
+    /// Closed windows are released, not just hidden: a hidden window keeps its (large) GPU backing
+    /// stores and its SwiftUI content keeps updating and animating in the background.
     func windowWillClose(_ notification: Notification) {
-        if (notification.object as? NSWindow) === monitorWindow {
+        guard let w = notification.object as? NSWindow else { return }
+        if w === monitorWindow {
             model.monitorVisible = false
-        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.monitorWindow?.contentViewController = nil
+                self?.monitorWindow = nil
+            }
+        } else if w === settingsWindow {
             model.windowVisible = false
+            DispatchQueue.main.async { [weak self] in
+                self?.settings?.window.contentView = nil
+                self?.settings = nil
+            }
         }
+    }
+
+    /// Monitor charts animate only while the window can actually be seen.
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        guard let w = notification.object as? NSWindow, w === monitorWindow else { return }
+        model.monitorOnScreen = w.occlusionState.contains(.visible)
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

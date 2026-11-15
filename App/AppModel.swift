@@ -33,6 +33,17 @@ struct FeatureFlags: Codable, Equatable {
     var undervolting = true
     var fans = true
     var monitoring = true
+    var gpu = true          // graphics switching (dual-GPU Macs only)
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        undervolting = try c.decodeIfPresent(Bool.self, forKey: .undervolting) ?? true
+        fans = try c.decodeIfPresent(Bool.self, forKey: .fans) ?? true
+        monitoring = try c.decodeIfPresent(Bool.self, forKey: .monitoring) ?? true
+        gpu = try c.decodeIfPresent(Bool.self, forKey: .gpu) ?? true
+    }
 
     static let defaultsKey = "features"
     static func load() -> FeatureFlags {
@@ -45,6 +56,7 @@ struct FeatureFlags: Codable, Equatable {
 
 final class AppModel: ObservableObject {
     let live = LiveMetrics()
+    let gpu = GPUSwitcher()
 
     @Published var features = FeatureFlags.load() {
         didSet {
@@ -53,6 +65,7 @@ final class AppModel: ObservableObject {
             // Turning a module off also stops what it was doing.
             if oldValue.undervolting && !features.undervolting && (status?.enforcing ?? false) { setUndervolting(false) }
             if oldValue.fans && !features.fans && fanDraft.enabled { updateFans(immediate: true) { $0.enabled = false } }
+            if oldValue.gpu != features.gpu { features.gpu ? gpu.start() : gpu.stop() }
             updatePolling()
         }
     }
@@ -105,11 +118,17 @@ final class AppModel: ObservableObject {
     private var inFlight = false
 
     /// Which UI surfaces are on screen; polling is fast only while something is visible.
-    var popoverVisible = false { didSet { updatePolling() } }
-    var windowVisible = false { didSet { updatePolling() } }
+    var popoverVisible = false { didSet { updatePolling(); gpu.setVisible(popoverVisible || windowVisible) } }
+    var windowVisible = false { didSet { updatePolling(); gpu.setVisible(popoverVisible || windowVisible) } }
     var monitorVisible = false { didSet { updatePolling() } }
+    /// Monitor window open and not covered/minimised: charts animate only then.
+    @Published var monitorOnScreen = true
+
+    /// Nothing of VoltBar's UI is on screen: values are not pushed into SwiftUI views then.
+    private var uiHidden: Bool { !(popoverVisible || windowVisible || monitorVisible) }
 
     init() {
+        if features.gpu { gpu.start() }
         updatePolling()
         refresh()
         // SMAppService.status is an XPC round-trip that can stall for seconds right after login —
@@ -192,6 +211,13 @@ final class AppModel: ObservableObject {
     #endif
 
     private func apply(status s: Status) {
+        // With no UI on screen, publishing every poll would only make hidden SwiftUI views re-render.
+        // Keep just what the menu bar item needs; everything is refreshed when a window or the menu opens.
+        let initialised = status != nil && (draftLoaded || !s.kextLoaded) && (fanDraftLoaded || (s.fans ?? []).isEmpty)
+        if uiHidden && initialised {
+            if status?.enforcing != s.enforcing { status?.enforcing = s.enforcing }
+            return
+        }
         if s.cpuName != status?.cpuName {
             var name = s.cpuName
             for junk in ["(R)", "(TM)", "(tm)", " CPU"] { name = name.replacingOccurrences(of: junk, with: "") }

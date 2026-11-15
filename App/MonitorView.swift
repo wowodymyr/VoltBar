@@ -192,7 +192,7 @@ struct MonitorView: View {
     @ViewBuilder
     private func content(_ item: ChartLayoutItem) -> some View {
         let timing = ChartTiming(smooth: model.monitorPrefs.smooth, last: history.times.last ?? Date(),
-                                 interval: history.sampleInterval)
+                                 interval: history.sampleInterval, paused: !model.monitorOnScreen)
         switch item.id {
         case .cpuThreads:
             ThreadsCard(history: history, samples: window, span: item.span, timing: timing)
@@ -328,6 +328,7 @@ struct ChartTiming {
     let smooth: Bool
     let last: Date
     let interval: Double
+    var paused = false     // window covered or minimised: no animation frames
 }
 
 struct ChartCard: View {
@@ -448,7 +449,7 @@ struct LineChart: View {
 
     var body: some View {
         if timing.smooth && animate {
-            TimelineView(.animation(minimumInterval: 1.0 / fps, paused: false)) { ctx in
+            TimelineView(.animation(minimumInterval: 1.0 / fps, paused: timing.paused)) { ctx in
                 canvas(progress: min(1, max(0, ctx.date.timeIntervalSince(timing.last) / timing.interval)))
             }
         } else {

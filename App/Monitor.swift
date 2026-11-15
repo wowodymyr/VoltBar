@@ -203,7 +203,8 @@ enum MenuBarRenderer {
     struct Item { let metric: Metric; let display: MenuBarDisplay }
 
     /// Draws the whole status item: optional bolt, then each enabled metric (label + value and/or graph).
-    static func image(config: MenuBarConfig, history: MetricsHistory, active: Bool, fanCount: Int) -> NSImage {
+    static func image(config: MenuBarConfig, history: MetricsHistory, active: Bool, fanCount: Int,
+                      discreteDot: Bool = false) -> NSImage {
         let items = Metric.allCases
             .filter { $0.fanIndex.map { $0 < fanCount } ?? true }
             .map { Item(metric: $0, display: config.display($0)) }
@@ -265,6 +266,11 @@ enum MenuBarRenderer {
                     }
                     tinted.draw(in: NSRect(x: (16 - sym.size.width) / 2, y: (height - sym.size.height) / 2,
                                            width: sym.size.width, height: sym.size.height))
+                    if discreteDot {
+                        // Discrete GPU active (like gSwitch's dot).
+                        (config.icon == .yellow ? NSColor.systemOrange : fg).setFill()
+                        NSBezierPath(ovalIn: NSRect(x: 11.5, y: 1, width: 4.5, height: 4.5)).fill()
+                    }
                 }
                 x = iconWidth
             }

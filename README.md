@@ -64,9 +64,19 @@ VoltBar does what VoltageShift does — CPU/GPU/cache voltage offsets, Turbo Boo
 
 Offsets are encoded exactly as the OC Mailbox specification defines them: in units of 1/1.024 mV. VoltageShift rounds to 1 mV, so for the same number, say −100, VoltBar sets a value about 2 % smaller in magnitude — which is exactly −100 mV.
 
+## Graphics switching (dual-GPU MacBook Pros)
+
+On MacBook Pros with two GPUs (for example Intel Iris Pro + NVIDIA GeForce GT 750M), **Settings → Graphics** and the menu choose which one is used — the functionality of [gSwitch](https://github.com/CodySchrank/gSwitch):
+
+* **Integrated** — always the integrated GPU: longest battery life, least heat. If an app wakes the discrete GPU, VoltBar switches back; before forcing it while apps are using the discrete GPU, VoltBar lists them and asks (they may quit).
+* **Dynamic** — macOS switches automatically (the default).
+* **Discrete** — always the discrete GPU.
+
+VoltBar shows the active GPU and the apps using (or asking for) the discrete one, can notify when the GPU changes and put a dot on the menu bar icon while the discrete GPU is active. An external display always needs the discrete GPU, so connecting one switches back to dynamic. Launch arguments work like gSwitch: `open -a VoltBar --args --integrated | --dynamic | --discrete`.
+
 ## Features on demand
 
-**Settings → General → Features** switches whole modules on or off: **Undervolting**, **Fan Control** and **Monitoring**. A module that's off disappears from the menu and Settings and does nothing in the background (factory voltages, macOS fan control, no sampling). Turn it back on in the same place.
+**Settings → General → Features** switches whole modules on or off: **Undervolting**, **Fan Control**, **Graphics Switching** and **Monitoring**. A module that's off disappears from the menu and Settings and does nothing in the background (factory voltages, macOS fan control, no sampling). Turn it back on in the same place.
 
 Undervolting also has its own on/off switch (menu and Settings → Undervolting), like fan control: off restores factory voltages and keeps the saved profile; on applies it again (with the usual 10-minute stability check).
 
