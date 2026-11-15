@@ -302,6 +302,39 @@ struct ActionButtons: View {
     }
 }
 
+/// Section header used by Settings tabs: big icon, title, description and the module's on/off switch.
+struct FeatureHeader: View {
+    let symbol: String
+    let title: String
+    let description: String
+    let isOn: Binding<Bool>
+    var switchDisabled = false
+    var width: CGFloat? = nil
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol).font(.system(size: 28)).frame(width: 36)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline)
+                Text(description).font(.callout).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            Toggle(title, isOn: isOn)
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .disabled(switchDisabled)
+        }
+        .frame(width: width)
+    }
+}
+
+extension AppModel {
+    /// On = the saved profile is applied and maintained by the daemon.
+    var undervoltingBinding: Binding<Bool> {
+        Binding(get: { self.status?.enforcing ?? false }, set: { self.setUndervolting($0) })
+    }
+}
+
 struct ProfileBadge: View {
     let active: Bool
     var body: some View {
@@ -317,6 +350,7 @@ struct ProfileBadge: View {
 struct CompactMenuView: View {
     @EnvironmentObject var model: AppModel
     let openSettings: (SettingsTab) -> Void
+    var openMonitor: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -325,11 +359,17 @@ struct CompactMenuView: View {
             Divider()
 
             // Undervolting
+            if model.features.undervolting {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Label("Undervolting", systemImage: "bolt").font(.headline)
                     Spacer()
-                    if let s = model.status, s.kextLoaded { ProfileBadge(active: s.enforcing) }
+                    Toggle("Undervolting", isOn: model.undervoltingBinding)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .disabled(model.status?.kextLoaded != true || (model.status?.saved == nil && !(model.status?.enforcing ?? false)))
+                        .help(model.status?.saved == nil ? "Save a profile first" : "Apply the saved profile")
                 }
                 StatusGate { s in
                     VStack(alignment: .leading, spacing: 8) {
@@ -346,16 +386,29 @@ struct CompactMenuView: View {
                 }
             }
             Divider()
+            }
 
             // Fans
-            if model.connected {
+            if model.connected && model.features.fans {
                 FansMenuSection(live: model.live, openFanSettings: { openSettings(.fans) })
                 Divider()
             }
 
+            if !model.features.undervolting && !model.features.fans {
+                Text("Undervolting and fan control are turned off. Turn them on in Settings → General.")
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                Divider()
+            }
+
             HStack {
-                Button("Settings…") { openSettings(.undervolting) }
+                Button("Settings…") { openSettings(model.features.undervolting ? .undervolting : (model.features.fans ? .fans : .general)) }
                     .keyboardShortcut(",", modifiers: .command)
+                if model.features.monitoring {
+                    Button("Monitor…") { openMonitor() }
+                        .keyboardShortcut("m", modifiers: [.command, .option])
+                        .help("Live charts of CPU, memory, swap and fans")
+                }
                 Spacer()
                 Button("Quit VoltBar") { NSApp.terminate(nil) }
                     .keyboardShortcut("q", modifiers: .command)
@@ -395,13 +448,14 @@ struct UndervoltSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            FeatureHeader(symbol: "bolt", title: "Undervolting",
+                          description: "Lowers CPU and GPU voltage to run cooler and hold turbo longer. Changes are applied with Save; a new profile has to survive \(VB.confirmSeconds / 60) minutes before it's used at boot, and a crash or hang turns it off automatically. Switching off restores factory voltages and keeps your profile.",
+                          isOn: model.undervoltingBinding,
+                          switchDisabled: model.status?.kextLoaded != true || (model.status?.saved == nil && !(model.status?.enforcing ?? false)),
+                          width: column * 2 + 21)
             StatusGate { s in
                 VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .top) {
-                        MetricsView(live: model.live).frame(width: column)
-                        Spacer()
-                        ProfileBadge(active: s.enforcing)
-                    }
+                    MetricsView(live: model.live).frame(width: column)
                     StatusNotes(status: s)
                     Divider()
                     HStack(alignment: .top, spacing: 20) {
@@ -445,12 +499,20 @@ struct GeneralSettingsView: View {
         VStack(alignment: .leading, spacing: 14) {
             HeaderView()
             Divider()
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Menu Bar").font(.headline)
-                Toggle("Show CPU temperature in the menu bar", isOn: $model.menuBarShowTemp)
-                Toggle("Show CPU power in the menu bar", isOn: $model.menuBarShowPower)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Features").font(.headline)
+                FeatureToggle(symbol: "bolt", title: "Undervolting",
+                              detail: "Voltage offsets, Turbo Boost and power limits. Off: factory settings.",
+                              isOn: $model.features.undervolting)
+                FeatureToggle(symbol: fanSymbolName, title: "Fan Control",
+                              detail: "Custom fan modes. Off: macOS controls the fans.",
+                              isOn: $model.features.fans)
+                FeatureToggle(symbol: "chart.xyaxis.line", title: "Monitoring",
+                              detail: "Monitor window and live values in the menu bar. Off: nothing is sampled.",
+                              isOn: $model.features.monitoring)
             }
-            .toggleStyle(.checkbox)
+            Divider()
+            MenuBarSettings(live: model.live)
             Divider()
             Toggle("Launch VoltBar at login", isOn: Binding(get: { model.launchAtLogin },
                                                             set: { model.setLaunchAtLogin($0) }))
@@ -466,7 +528,76 @@ struct GeneralSettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 440, alignment: .leading)
+        .frame(width: 480, alignment: .leading)
         .fixedSize()
+    }
+}
+
+struct FeatureToggle: View {
+    let symbol: String
+    let title: String
+    let detail: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: symbol).font(.system(size: 16)).frame(width: 22)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.callout.weight(.medium))
+                Text(detail).font(.caption)
+            }
+            Spacer()
+            Toggle(title, isOn: $isOn).toggleStyle(.switch).labelsHidden().controlSize(.small)
+        }
+    }
+}
+
+/// Menu bar item: icon style, separators and, per metric, nothing / value / graph / both.
+struct MenuBarSettings: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject var live: LiveMetrics
+
+    private var metrics: [Metric] {
+        [.cpuLoad, .cpuTemp, .cpuPower, .cpuFreq, .memory, .swap] + live.fans.compactMap { Metric.fan($0.index) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Menu Bar").font(.headline)
+            HStack {
+                Text("Icon")
+                Spacer()
+                Picker("Icon", selection: Binding(get: { model.menuBarConfig.icon },
+                                                  set: { model.menuBarConfig.icon = $0 })) {
+                    ForEach(MenuBarIconStyle.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 260)
+            }
+            if model.features.monitoring {
+            Toggle("Separators between items", isOn: Binding(get: { model.menuBarConfig.separators },
+                                                             set: { model.menuBarConfig.separators = $0 }))
+                .toggleStyle(.checkbox)
+            ForEach(metrics, id: \.self) { m in
+                HStack {
+                    Text(m.title(fans: live.fans))
+                    Spacer()
+                    Picker(m.title(fans: live.fans), selection: Binding(get: { model.menuBarConfig.display(m) },
+                                                                        set: { model.menuBarConfig.items[m] = $0 })) {
+                        ForEach(MenuBarDisplay.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 260)
+                }
+            }
+            } else {
+                Text("Turn on Monitoring to show live values and graphs in the menu bar.").font(.caption)
+            }
+            if model.menuBarConfig.icon == .hidden && !(model.menuBarConfig.hasItems && model.features.monitoring) {
+                Notice(text: "With nothing else shown, the icon stays visible so VoltBar can still be opened.", kind: .info)
+            }
+        }
     }
 }

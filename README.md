@@ -28,6 +28,22 @@ It ships its own MSR driver (`VoltBarMSR.kext`) and rewrites all the user-space 
 
 Offsets are encoded exactly as the OC Mailbox specification defines them: in units of 1/1.024 mV. VoltageShift rounds to 1 mV, so for the same number, say −100, VoltBar sets a value about 2 % smaller in magnitude — which is exactly −100 mV.
 
+## Features on demand
+
+**Settings → General → Features** switches whole modules on or off: **Undervolting**, **Fan Control** and **Monitoring**. A module that's off disappears from the menu and Settings and does nothing in the background (factory voltages, macOS fan control, no sampling). Turn it back on in the same place.
+
+Undervolting also has its own on/off switch (menu and Settings → Undervolting), like fan control: off restores factory voltages and keeps the saved profile; on applies it again (with the usual 10-minute stability check).
+
+## Monitor and menu bar
+
+**Monitor…** in the menu opens live charts (1, 2 or 5 minutes) of CPU load, per-thread load, frequency, package power and temperature, memory, swap and fan speeds — a lightweight alternative to Intel Power Gadget. History is recorded in the background, so the charts are filled as soon as the window opens.
+
+* **Smooth** (on by default): curves are interpolated and charts scroll continuously between samples; the frame rate adapts to the time span (≈20/10/4 fps) to keep CPU use low.
+* **Charts** menu: show or hide each chart, including **CPU Threads** (every logical CPU as a mini chart in one card), and reset the layout.
+* Charts sit in a two-column grid and are 1 or 2 cells wide and 1 or 2 cells tall: drag a chart to move it, drag its corner handle right/left and down/up to change its size (applied on release). The layout is remembered; the window scrolls if it doesn't fit the screen.
+
+**Settings → General → Menu Bar** customises the status item: the ⚡ icon can be monochrome, yellow or hidden; separators can be drawn between items; every value has a fixed width, so the item never jumps as numbers change; and every metric (CPU load, temperature, power, frequency, memory, swap, each fan) can be shown as a value, a mini graph (labelled on its left), both, or not at all.
+
 ## Fan control
 
 Off by default; switch it on in the menu (**Fans**) or in **Settings → Fans**. Each fan gets its own mode:

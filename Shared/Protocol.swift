@@ -225,13 +225,15 @@ public struct Request: Codable {
     public var msr: UInt32? = nil
     public var value: UInt64? = nil
     public var fanConfig: FanConfig? = nil      // for cmd "fans"
+    public var enabled: Bool? = nil             // for cmd "undervolt"
 
-    public init(cmd: String, settings: VBSettings? = nil, msr: UInt32? = nil, value: UInt64? = nil, fanConfig: FanConfig? = nil) {
+    public init(cmd: String, settings: VBSettings? = nil, msr: UInt32? = nil, value: UInt64? = nil, fanConfig: FanConfig? = nil, enabled: Bool? = nil) {
         self.cmd = cmd
         self.settings = settings
         self.msr = msr
         self.value = value
         self.fanConfig = fanConfig
+        self.enabled = enabled
     }
 }
 

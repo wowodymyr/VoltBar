@@ -26,8 +26,36 @@ final class LiveMetrics: ObservableObject {
     }
 }
 
+/// Which parts of VoltBar are in use. A module that's off disappears from the menu and Settings and
+/// does nothing in the background (undervolting off = factory voltages, fans off = macOS control,
+/// monitoring off = no sampling, no charts, menu bar shows only the icon).
+struct FeatureFlags: Codable, Equatable {
+    var undervolting = true
+    var fans = true
+    var monitoring = true
+
+    static let defaultsKey = "features"
+    static func load() -> FeatureFlags {
+        guard let d = UserDefaults.standard.data(forKey: defaultsKey),
+              let f = try? JSONDecoder().decode(FeatureFlags.self, from: d) else { return FeatureFlags() }
+        return f
+    }
+    func save() { if let d = try? JSONEncoder().encode(self) { UserDefaults.standard.set(d, forKey: Self.defaultsKey) } }
+}
+
 final class AppModel: ObservableObject {
     let live = LiveMetrics()
+
+    @Published var features = FeatureFlags.load() {
+        didSet {
+            guard features != oldValue else { return }
+            features.save()
+            // Turning a module off also stops what it was doing.
+            if oldValue.undervolting && !features.undervolting && (status?.enforcing ?? false) { setUndervolting(false) }
+            if oldValue.fans && !features.fans && fanDraft.enabled { updateFans(immediate: true) { $0.enabled = false } }
+            updatePolling()
+        }
+    }
     @Published private(set) var status: Status? = nil
     @Published private(set) var connected = true
     @Published private(set) var connectionError: String? = nil
@@ -38,12 +66,25 @@ final class AppModel: ObservableObject {
     @Published private(set) var launchAtLogin = false
 
     // Menu bar item: what to show next to the ⚡ icon.
-    @Published var menuBarShowTemp = UserDefaults.standard.bool(forKey: "menuBarShowTemp") {
-        didSet { UserDefaults.standard.set(menuBarShowTemp, forKey: "menuBarShowTemp"); updatePolling() }
+    @Published var menuBarConfig = MenuBarConfig.load() {
+        didSet { menuBarConfig.save(); updatePolling() }
     }
-    @Published var menuBarShowPower = UserDefaults.standard.bool(forKey: "menuBarShowPower") {
-        didSet { UserDefaults.standard.set(menuBarShowPower, forKey: "menuBarShowPower"); updatePolling() }
+
+    /// Monitor window: smooth scrolling and chart layout (persisted).
+    @Published var monitorPrefs = MonitorPrefs.load() {
+        didSet { if monitorPrefs != oldValue { monitorPrefs.save() } }
     }
+
+    func updateChart(_ id: ChartID, _ change: (inout ChartLayoutItem) -> Void) {
+        guard let i = monitorPrefs.items.firstIndex(where: { $0.id == id }) else { return }
+        var p = monitorPrefs
+        change(&p.items[i])
+        if p != monitorPrefs { monitorPrefs = p }
+    }
+
+    /// History of every metric for the Monitor window and menu bar graphs.
+    let history = MetricsHistory()
+    private let stats = SystemStats()
 
     /// Mac model identifier, e.g. "MacBookPro11,3".
     let macModel: String = {
@@ -66,6 +107,7 @@ final class AppModel: ObservableObject {
     /// Which UI surfaces are on screen; polling is fast only while something is visible.
     var popoverVisible = false { didSet { updatePolling() } }
     var windowVisible = false { didSet { updatePolling() } }
+    var monitorVisible = false { didSet { updatePolling() } }
 
     init() {
         updatePolling()
@@ -81,8 +123,10 @@ final class AppModel: ObservableObject {
     // MARK: Polling
 
     private func updatePolling() {
-        let visible = popoverVisible || windowVisible
-        let interval: TimeInterval = visible ? 1.0 : ((menuBarShowTemp || menuBarShowPower) ? 2.0 : 15.0)
+        // History is recorded all the time so the Monitor has data the moment it opens.
+        let visible = popoverVisible || windowVisible || (monitorVisible && features.monitoring)
+        let interval: TimeInterval = visible ? 1.0
+            : (features.monitoring ? (menuBarConfig.hasItems ? 2.0 : 5.0) : 15.0)
         if visible { refresh() }
         if interval == timerInterval, timer != nil { return }
         timer?.invalidate()
@@ -106,14 +150,42 @@ final class AppModel: ObservableObject {
                     if !self.connected { self.connected = true }
                     if self.connectionError != nil { self.connectionError = nil }
                     if let s = r.status { self.apply(status: s) }
+                    self.sample(r.status)
                 case .failure(let e):
                     if self.connected { self.connected = false }
                     let text = "\(e)"
                     if self.connectionError != text { self.connectionError = text }
+                    self.sample(nil)
                 }
             }
         }
     }
+
+    /// Records one point of every metric: CPU/RAM/swap from the kernel, the rest from the daemon.
+    private func sample(_ s: Status?) {
+        guard features.monitoring else { return }
+        var v: [Metric: Double] = [:]
+        if let x = stats.cpuLoad() { v[.cpuLoad] = x }
+        if let m = stats.memory() { v[.memory] = m.percent; memory = m }
+        if let w = stats.swap() {
+            v[.swap] = w.usedGB
+            history.setRange(.swap, 0...max(1, w.totalGB))
+            swap = w
+        }
+        if let t = s?.tempC { v[.cpuTemp] = Double(t) }
+        if let p = s?.packageW { v[.cpuPower] = p }
+        if let f = s?.freqGHz { v[.cpuFreq] = f }
+        for f in s?.fans ?? [] {
+            guard let m = Metric.fan(f.index) else { continue }
+            v[m] = f.rpm
+            history.setRange(m, f.minRPM * 0.9...f.maxRPM)
+        }
+        history.append(v, threadLoad: stats.perThreadLoad())
+    }
+
+    /// Latest memory / swap totals (for labels like "8.8 of 16 GB").
+    private(set) var memory: MemoryUsage? = nil
+    private(set) var swap: SwapUsage? = nil
 
     #if VOLTBAR_TESTING
     func injectForTesting(_ s: Status) { apply(status: s) }
@@ -236,6 +308,17 @@ final class AppModel: ObservableObject {
     private func show(_ text: String, error: Bool) {
         resultText = text
         resultIsError = error
+    }
+
+    // MARK: Undervolting on/off
+
+    /// Switches the saved undervolting profile on or off; the profile itself is kept.
+    func setUndervolting(_ on: Bool) {
+        send(Request(cmd: "undervolt", enabled: on)) { [weak self] r in
+            guard let self = self, r.ok else { return }
+            self.show(on ? "Undervolting on. If the system runs \(VB.confirmSeconds / 60) min without a crash, the profile will be applied at every boot."
+                         : "Undervolting off — factory voltages. Your profile is kept.", error: false)
+        }
     }
 
     // MARK: Fans

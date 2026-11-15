@@ -11,7 +11,7 @@ import Foundation
 import IOKit
 import IOKit.pwr_mgt
 
-let daemonVersion = "1.5"
+let daemonVersion = "2.0"
 
 // MARK: - Хранилище
 
@@ -505,6 +505,42 @@ final class Core {
             persist()
             scheduleConfirm(after: Double(VB.confirmSeconds))
             vlog("Profile saved (uid \(uid)): \(s.offsets) turbo=\(s.manageTurbo ? "\(s.turbo)" : "-") power=\(s.managePower ? "\(s.pl1)/\(s.pl2)" : "-")")
+            return Response(ok: true, status: status())
+
+        case "undervolt":
+            // Switch the saved profile on/off without forgetting it (unlike "reset").
+            guard let on = req.enabled else { return Response(ok: false, error: "Missing on/off") }
+            if on {
+                guard let s = config.settings else { return Response(ok: false, error: "No saved profile yet — adjust the values and press Save") }
+                guard kextReady || hw.dev.open() else { return Response(ok: false, error: HWError.noKext.description) }
+                kextReady = true
+                let errs = apply(s)
+                if !errs.isEmpty {
+                    _ = resetHardware()
+                    return Response(ok: false, error: "Profile could not be applied", status: status(), details: errs)
+                }
+                override = nil
+                config.enabled = true
+                state.message = nil
+                state.pendingUntil = Date().timeIntervalSince1970 + Double(VB.confirmSeconds)
+                state.pendingBoot = currentBoot
+                state.profileSavedAt = Date().timeIntervalSince1970
+                state.handledPanicAt = newestPanicReport()?.date ?? state.handledPanicAt
+                persist()
+                scheduleConfirm(after: Double(VB.confirmSeconds))
+                vlog("Undervolting on (uid \(uid))")
+            } else {
+                var errs: [String] = []
+                if kextReady || hw.dev.open() { kextReady = true; errs = resetHardware() }
+                override = nil
+                config.enabled = false
+                state.pendingUntil = nil
+                state.pendingBoot = nil
+                persist()
+                confirmGeneration += 1
+                vlog("Undervolting off (uid \(uid))")
+                if !errs.isEmpty { return Response(ok: false, error: "Turned off with errors", status: status(), details: errs) }
+            }
             return Response(ok: true, status: status())
 
         case "fans":

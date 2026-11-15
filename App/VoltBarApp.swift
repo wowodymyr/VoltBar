@@ -18,20 +18,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     private let model = AppModel()
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
-    private var settingsWindow: NSWindow?
-    private var tabController: NSTabViewController?
+    private var settings: SettingsWindowController?
+    private var settingsWindow: NSWindow? { settings?.window }
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            button.image = Self.icon(active: false)
+            button.image = NSImage(systemSymbolName: "bolt", accessibilityDescription: "VoltBar")
+            button.image?.isTemplate = true
             button.target = self
             button.action = #selector(togglePopover(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
-        let root = CompactMenuView(openSettings: { [weak self] tab in self?.showSettings(tab) })
+        let root = CompactMenuView(openSettings: { [weak self] tab in self?.showSettings(tab) },
+                                   openMonitor: { [weak self] in self?.showMonitor() })
             .environmentObject(model)
         let hosting = NSHostingController(rootView: root)
         if #available(macOS 13.0, *) { hosting.sizingOptions = [.preferredContentSize] }
@@ -42,15 +44,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         // Build and lay out the view now, not on the first click.
         hosting.view.layoutSubtreeIfNeeded()
 
-        let metrics = model.live.$tempC.combineLatest(model.live.$packageW)
-        model.$status.map { $0?.enforcing == true }
-            .combineLatest(metrics, model.$menuBarShowTemp, model.$menuBarShowPower)
-            .map { active, m, showTemp, showPower -> MenuBarLabel in
-                MenuBarLabel(active: active, text: Self.metricsText(temp: showTemp ? m.0 : nil, showTemp: showTemp,
-                                                                    power: showPower ? m.1 : nil, showPower: showPower))
-            }
-            .removeDuplicates()
-            .sink { [weak self] label in self?.updateStatusItem(label) }
+        // Redraw the menu bar item on every new sample, settings change or profile change.
+        model.history.$tick.map { _ in () }
+            .merge(with: model.$menuBarConfig.map { _ in () },
+                   model.$features.map { _ in () },
+                   model.$status.map { $0?.enforcing == true }.removeDuplicates().map { _ in () },
+                   model.live.$fans.map { $0.count }.removeDuplicates().map { _ in () })
+            .receive(on: RunLoop.main)
+            .sink { [weak self] in self?.renderStatusItem() }
+            .store(in: &cancellables)
+
+        // Monitoring switched off: close its window.
+        model.$features.map(\.monitoring).removeDuplicates()
+            .sink { [weak self] on in if !on { self?.monitorWindow?.close() } }
             .store(in: &cancellables)
 
         // macOS 12 has no NSHostingController.sizingOptions: resize popover/window by hand
@@ -69,46 +75,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             let size = view.fittingSize
             if size != popover.contentSize { popover.contentSize = size }
         }
-        if let w = settingsWindow, w.isVisible, let tc = tabController,
-           tc.selectedTabViewItemIndex >= 0, let vc = tc.tabViewItems[tc.selectedTabViewItemIndex].viewController {
-            vc.view.layoutSubtreeIfNeeded()
-            let size = vc.view.fittingSize
-            if size != vc.preferredContentSize { vc.preferredContentSize = size }
-        }
+        if let s = settings, s.window.isVisible { s.refitCurrent() }
     }
 
-    private struct MenuBarLabel: Equatable {
-        var active: Bool
-        var text: String
-    }
-
-    private static func metricsText(temp: Int?, showTemp: Bool, power: Double?, showPower: Bool) -> String {
-        var parts: [String] = []
-        if showTemp { parts.append(temp.map { "\($0)°" } ?? "–°") }
-        if showPower { parts.append(power.map { String(format: "%.1fW", $0) } ?? "–W") }
-        return parts.joined(separator: " ")
-    }
-
-    private func updateStatusItem(_ label: MenuBarLabel) {
+    private func renderStatusItem() {
         guard let button = statusItem.button else { return }
-        button.image = Self.icon(active: label.active)
-        if label.text.isEmpty {
-            statusItem.length = NSStatusItem.squareLength
-            button.title = ""
-            button.imagePosition = .imageOnly
-        } else {
-            statusItem.length = NSStatusItem.variableLength
-            button.imagePosition = .imageLeading
-            // Plain title (not attributed) so the menu bar picks the right text color for light/dark.
-            button.font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-            button.title = " " + label.text
-        }
+        var cfg = model.menuBarConfig
+        if !model.features.monitoring { cfg.items = [:] }   // monitoring off: icon only
+        let img = MenuBarRenderer.image(config: cfg, history: model.history,
+                                        active: model.status?.enforcing == true, fanCount: model.live.fans.count)
+        button.title = ""
+        button.imagePosition = .imageOnly
+        button.image = img
+        statusItem.length = img.size.width <= 18 ? NSStatusItem.squareLength : img.size.width + 8
     }
 
-    private static func icon(active: Bool) -> NSImage? {
-        let img = NSImage(systemSymbolName: active ? "bolt.fill" : "bolt", accessibilityDescription: "VoltBar")
-        img?.isTemplate = true
-        return img
+    // MARK: Monitor window
+
+    private var monitorWindow: NSWindow?
+
+    private func showMonitor() {
+        guard model.features.monitoring else { return }
+        popover.performClose(nil)
+        if monitorWindow == nil {
+            let view = MonitorView(history: model.history, live: model.live).environmentObject(model)
+            let h = NSHostingController(rootView: view)
+            if #available(macOS 13.0, *) { h.sizingOptions = [.preferredContentSize] }
+            let w = NSWindow(contentViewController: h)
+            w.title = "VoltBar Monitor"
+            w.styleMask = [.titled, .closable, .miniaturizable]
+            w.isReleasedWhenClosed = false
+            w.delegate = self
+            w.setFrameAutosaveName("VoltBarMonitor")
+            if !w.setFrameUsingName("VoltBarMonitor") { w.center() }
+            monitorWindow = w
+        }
+        model.monitorVisible = true
+        NSApp.activate(ignoringOtherApps: true)
+        monitorWindow?.makeKeyAndOrderFront(nil)
     }
 
     // MARK: Popover
@@ -140,47 +144,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
     private func showSettings(_ tab: SettingsTab = .undervolting) {
         popover.performClose(nil)
-        if settingsWindow == nil {
-            let tc = NSTabViewController()
-            tc.tabStyle = .toolbar
-            for t in SettingsTab.allCases {
-                let content: AnyView
+        if settings == nil {
+            let model = self.model
+            let s = SettingsWindowController(tabs: enabledTabs()) { t in
                 switch t {
-                case .undervolting: content = AnyView(UndervoltSettingsView())
-                case .fans: content = AnyView(FansSettingsView(live: model.live))
-                case .general: content = AnyView(GeneralSettingsView())
+                case .undervolting: return AnyView(UndervoltSettingsView().environmentObject(model))
+                case .fans: return AnyView(FansSettingsView(live: model.live).environmentObject(model))
+                case .general: return AnyView(GeneralSettingsView().environmentObject(model))
                 }
-                let h = NSHostingController(rootView: AnyView(content.environmentObject(model)))
-                h.title = t.title
-                if #available(macOS 13.0, *) {
-                    h.sizingOptions = [.preferredContentSize]
-                } else {
-                    h.view.layoutSubtreeIfNeeded()
-                    h.preferredContentSize = h.view.fittingSize
-                }
-                let item = NSTabViewItem(viewController: h)
-                item.label = t.title
-                item.image = NSImage(systemSymbolName: t.symbol, accessibilityDescription: t.title)
-                tc.addTabViewItem(item)
             }
-            let w = NSWindow(contentViewController: tc)
-            w.styleMask = [.titled, .closable, .miniaturizable]
-            w.toolbarStyle = .preference
-            w.isReleasedWhenClosed = false
-            w.delegate = self
-            tabController = tc
-            settingsWindow = w
+            s.window.delegate = self
+            settings = s
+            // Show or hide tabs when modules are switched on/off in General.
+            model.$features.removeDuplicates().dropFirst()
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in
+                    guard let self = self else { return }
+                    self.settings?.setTabs(self.enabledTabs())
+                }
+                .store(in: &cancellables)
         }
-        tabController?.selectedTabViewItemIndex = tab.rawValue
-        if let w = settingsWindow, !w.isVisible { w.center() }
+        let wasVisible = settingsWindow?.isVisible ?? false
+        settings?.select(tab)
+        if !wasVisible { settingsWindow?.center() }
         model.windowVisible = true
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
-        if #unavailable(macOS 13.0) { fitToContent() }
+    }
+
+    private func enabledTabs() -> [SettingsTab] {
+        SettingsTab.allCases.filter {
+            switch $0 {
+            case .undervolting: return model.features.undervolting
+            case .fans: return model.features.fans
+            case .general: return true
+            }
+        }
     }
 
     func windowWillClose(_ notification: Notification) {
-        model.windowVisible = false
+        if (notification.object as? NSWindow) === monitorWindow {
+            model.monitorVisible = false
+        } else {
+            model.windowVisible = false
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
