@@ -30,8 +30,26 @@ echo "→ CLI"
 "${SWIFTC[@]}" -o build/voltbarctl Shared/Protocol.swift CLI/main.swift
 
 echo "→ app"
-"${SWIFTC[@]}" -parse-as-library -o "$APP/Contents/MacOS/VoltBar" Shared/Protocol.swift App/*.swift
+# Whole-module build that also emits the constant values the App Intents (Shortcuts) metadata needs.
+# AppIntents is weak-linked so the app still runs on macOS 12, where the framework doesn't exist.
+echo '["AppIntent","EntityQuery","AppEntity","TransientEntity","AppEnum","AppShortcutProviding","AppShortcutsProvider","AnyResolverProviding","AppIntentsPackage","DynamicOptionsProvider"]' > build/appintents-protocols.json
+"${SWIFTC[@]}" -parse-as-library -module-name VoltBar -wmo \
+    -emit-const-values-path build/VoltBar.swiftconstvalues \
+    -Xfrontend -const-gather-protocols-file -Xfrontend build/appintents-protocols.json \
+    -Xlinker -weak_framework -Xlinker AppIntents \
+    -o "$APP/Contents/MacOS/VoltBar" Shared/Protocol.swift App/*.swift
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+
+echo "→ Shortcuts metadata"
+SRC_ARGS=(); for f in Shared/Protocol.swift App/*.swift; do SRC_ARGS+=(--source-files "$PWD/$f"); done
+xcrun appintentsmetadataprocessor --output "$APP/Contents/Resources" \
+    --target-triple x86_64-apple-macos12.0 --module-name VoltBar \
+    --toolchain-dir "$(dirname "$(dirname "$(xcrun --find swiftc)")")" \
+    --binary-file "$APP/Contents/MacOS/VoltBar" "${SRC_ARGS[@]}" \
+    --sdk-root "$(xcrun --show-sdk-path)" --swift-const-vals build/VoltBar.swiftconstvalues \
+    --compile-time-extraction --deployment-target 12.0 --platform-family macOS >build/appintents.log 2>&1 \
+    || { cat build/appintents.log >&2; exit 1; }
+[[ -f "$APP/Contents/Resources/Metadata.appintents/extract.actionsdata" ]] || { echo "Shortcuts metadata missing" >&2; cat build/appintents.log >&2; exit 1; }
 if [[ ! -f Resources/AppIcon.icns ]]; then
     echo "→ icon"
     xcrun swift Tools/make-icon.swift Resources/AppIcon.icns

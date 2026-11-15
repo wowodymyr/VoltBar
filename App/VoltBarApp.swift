@@ -187,6 +187,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
                 case .undervolting: return AnyView(UndervoltSettingsView().environmentObject(model))
                 case .fans: return AnyView(FansSettingsView(live: model.live).environmentObject(model))
                 case .gpu: return AnyView(GPUSettingsView(gpu: model.gpu))
+                case .profiles: return AnyView(ProfilesSettingsView(store: model.profiles).environmentObject(model))
+                case .menuBar: return AnyView(MenuBarSettingsView().environmentObject(model))
                 case .general: return AnyView(GeneralSettingsView().environmentObject(model))
                 }
             }
@@ -207,7 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             case .undervolting: return model.features.undervolting
             case .fans: return model.features.fans
             case .gpu: return model.features.gpu && model.gpu.available
-            case .general: return true
+            case .profiles, .menuBar, .general: return true
             }
         }
     }
@@ -235,6 +237,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     func windowDidChangeOcclusionState(_ notification: Notification) {
         guard let w = notification.object as? NSWindow, w === monitorWindow else { return }
         model.monitorOnScreen = w.occlusionState.contains(.visible)
+    }
+
+    // MARK: voltbar:// URLs (Shortcuts "Open URLs", Terminal, voltbarctl)
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            if let error = Automation.handle(url, model: model,
+                                             openSettings: { [weak self] in self?.showSettings($0) },
+                                             openMonitor: { [weak self] in self?.showMonitor() }) {
+                NSLog("VoltBar: %@ — %@", url.absoluteString, error)
+            }
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

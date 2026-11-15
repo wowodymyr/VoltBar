@@ -34,6 +34,7 @@ struct FeatureFlags: Codable, Equatable {
     var fans = true
     var monitoring = true
     var gpu = true          // graphics switching (dual-GPU Macs only)
+    var autoProfiles = true // switch profiles on power adapter connect/disconnect
 
     init() {}
 
@@ -43,6 +44,7 @@ struct FeatureFlags: Codable, Equatable {
         fans = try c.decodeIfPresent(Bool.self, forKey: .fans) ?? true
         monitoring = try c.decodeIfPresent(Bool.self, forKey: .monitoring) ?? true
         gpu = try c.decodeIfPresent(Bool.self, forKey: .gpu) ?? true
+        autoProfiles = try c.decodeIfPresent(Bool.self, forKey: .autoProfiles) ?? true
     }
 
     static let defaultsKey = "features"
@@ -55,8 +57,13 @@ struct FeatureFlags: Codable, Equatable {
 }
 
 final class AppModel: ObservableObject {
+    /// The app's single model — also reached by Shortcuts actions and voltbar:// URLs.
+    static private(set) weak var shared: AppModel?
+
     let live = LiveMetrics()
     let gpu = GPUSwitcher()
+    let profiles = ProfileStore()
+    let power = PowerSourceWatcher()
 
     @Published var features = FeatureFlags.load() {
         didSet {
@@ -66,6 +73,9 @@ final class AppModel: ObservableObject {
             if oldValue.undervolting && !features.undervolting && (status?.enforcing ?? false) { setUndervolting(false) }
             if oldValue.fans && !features.fans && fanDraft.enabled { updateFans(immediate: true) { $0.enabled = false } }
             if oldValue.gpu != features.gpu { features.gpu ? gpu.start() : gpu.stop() }
+            if oldValue.autoProfiles != features.autoProfiles {
+                features.autoProfiles ? startAutoProfiles(atLaunch: false) : power.stop()
+            }
             updatePolling()
         }
     }
@@ -128,7 +138,9 @@ final class AppModel: ObservableObject {
     private var uiHidden: Bool { !(popoverVisible || windowVisible || monitorVisible) }
 
     init() {
+        AppModel.shared = self
         if features.gpu { gpu.start() }
+        if features.autoProfiles { startAutoProfiles(atLaunch: true) }
         updatePolling()
         refresh()
         // SMAppService.status is an XPC round-trip that can stall for seconds right after login —

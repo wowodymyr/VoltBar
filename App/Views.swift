@@ -357,6 +357,10 @@ struct CompactMenuView: View {
             HeaderView()
             if model.connected { MetricsView(live: model.live) }
             Divider()
+            if model.connected {
+                ProfilesMenuSection(store: model.profiles, openSettings: { openSettings(.profiles) })
+                Divider()
+            }
 
             // Undervolting
             if model.features.undervolting {
@@ -427,13 +431,15 @@ struct CompactMenuView: View {
 // MARK: - Settings window (tabs: Undervolting, Fans, General)
 
 enum SettingsTab: Int, CaseIterable {
-    case undervolting, fans, gpu, general
+    case undervolting, fans, gpu, profiles, menuBar, general
 
     var title: String {
         switch self {
         case .undervolting: return "Undervolting"
         case .fans: return "Fans"
         case .gpu: return "Graphics"
+        case .profiles: return "Profiles"
+        case .menuBar: return "Menu Bar"
         case .general: return "General"
         }
     }
@@ -443,6 +449,8 @@ enum SettingsTab: Int, CaseIterable {
         case .undervolting: return "bolt"
         case .fans: return fanSymbolName
         case .gpu: return gpuSymbolName
+        case .profiles: return "square.stack.3d.up"
+        case .menuBar: return "menubar.rectangle"
         case .general: return "gearshape"
         }
     }
@@ -519,12 +527,13 @@ struct GeneralSettingsView: View {
                                   detail: "Integrated / dynamic / discrete GPU. Off: macOS decides (dynamic).",
                                   isOn: $model.features.gpu)
                 }
+                FeatureToggle(symbol: "powerplug", title: "Automatic Profile Switching",
+                              detail: "Apply profiles when the power adapter is connected or disconnected (Settings → Profiles).",
+                              isOn: $model.features.autoProfiles)
                 FeatureToggle(symbol: "chart.xyaxis.line", title: "Monitoring",
                               detail: "Monitor window and live values in the menu bar. Off: nothing is sampled.",
                               isOn: $model.features.monitoring)
             }
-            Divider()
-            MenuBarSettings(live: model.live)
             Divider()
             Toggle("Launch VoltBar at login", isOn: Binding(get: { model.launchAtLogin },
                                                             set: { model.setLaunchAtLogin($0) }))
@@ -564,6 +573,28 @@ struct FeatureToggle: View {
     }
 }
 
+struct MenuBarSettingsView: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "menubar.rectangle").font(.system(size: 28)).frame(width: 36)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Menu Bar").font(.headline)
+                    Text("What the VoltBar item shows next to (or instead of) the ⚡ icon. Values keep a fixed width so the item doesn't jump.")
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            MenuBarSettings(live: model.live)
+        }
+        .padding(20)
+        .frame(width: 480, alignment: .leading)
+        .fixedSize()
+    }
+}
+
 /// Menu bar item: icon style, separators and, per metric, nothing / value / graph / both.
 struct MenuBarSettings: View {
     @EnvironmentObject var model: AppModel
@@ -575,7 +606,6 @@ struct MenuBarSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Menu Bar").font(.headline)
             HStack {
                 Text("Icon")
                 Spacer()

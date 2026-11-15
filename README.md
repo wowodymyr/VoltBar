@@ -44,7 +44,8 @@ VoltBar does what VoltageShift does — CPU/GPU/cache voltage offsets, Turbo Boo
   * after waking from sleep or hibernation (subscribes to `IORegisterForSystemPower`, applies after 2 s and re-checks after 15 s);
   * every 30 s it checks that the values are still in place and restores them if not. VoltageShift does this once every 160 minutes by default.
 * **Fan control** through the SMC and **monitoring** with a background history (see below).
-* **CLI** `voltbarctl` with `info`, `mon`, `offset`, `turbo`, `power`, `fans`, `read`, `write` and `--damage`, just like voltageshift.
+* **Profiles** and **Shortcuts** actions, plus a `voltbar://` URL scheme for automation.
+* **CLI** `voltbarctl` with `info`, `mon`, `offset`, `turbo`, `power`, `fans`, `profile`, `gpu`, `read`, `write` and `--damage`, just like voltageshift.
 
 > ⚠️ This is a tool for advanced users. Too deep an undervolt causes freezes and kernel panics; raising the voltage (positive offset) can damage the CPU.
 
@@ -74,9 +75,21 @@ On MacBook Pros with two GPUs (for example Intel Iris Pro + NVIDIA GeForce GT 75
 
 VoltBar shows the active GPU and the apps using (or asking for) the discrete one, can notify when the GPU changes and put a dot on the menu bar icon while the discrete GPU is active. An external display always needs the discrete GPU, so connecting one switches back to dynamic. Launch arguments work like gSwitch: `open -a VoltBar --args --integrated | --dynamic | --discrete`.
 
+## Profiles and Shortcuts
+
+**Settings → Profiles** saves the current undervolting, fan and graphics settings as a named profile (“Silent”, “Battery”, “Games”…). Each part is optional — a profile only changes what it includes. Apply one from the menu (**Profile**), from Settings, or automatically:
+
+* **Automatically on power changes** (built in, works on macOS 12 and 13, which have no “Charger” trigger in Shortcuts): choose a profile for *power adapter connected* and one for *running on battery* in **Settings → Profiles → Automatic Switching**; optionally also apply it when VoltBar starts. The module can be switched off in **General → Features**.
+* **Shortcuts** (macOS 13+): native actions **Apply VoltBar Profile**, **Set Graphics Mode**, **Set VoltBar Fan Control**, **Set VoltBar Undervolting** and **Open VoltBar Monitor** — use them in shortcuts and personal automations (time of day, power adapter, focus mode…).
+* **Any macOS, including 12**: the `voltbar://` URL scheme, e.g. with the Shortcuts action “Open URLs”:
+  `voltbar://profile/Silent`, `voltbar://gpu/integrated`, `voltbar://fans/off`, `voltbar://undervolt/on`, `voltbar://monitor`, `voltbar://settings/profiles`.
+* **Terminal**: `voltbarctl profiles`, `voltbarctl profile Silent`, `voltbarctl gpu integrated`.
+
+Profiles are stored in `~/Library/Application Support/VoltBar/profiles.json`.
+
 ## Features on demand
 
-**Settings → General → Features** switches whole modules on or off: **Undervolting**, **Fan Control**, **Graphics Switching** and **Monitoring**. A module that's off disappears from the menu and Settings and does nothing in the background (factory voltages, macOS fan control, no sampling). Turn it back on in the same place.
+**Settings → General → Features** switches whole modules on or off: **Undervolting**, **Fan Control**, **Graphics Switching**, **Automatic Profile Switching** and **Monitoring**. A module that's off disappears from the menu and Settings and does nothing in the background (factory voltages, macOS fan control, no sampling). Turn it back on in the same place.
 
 Undervolting also has its own on/off switch (menu and Settings → Undervolting), like fan control: off restores factory voltages and keeps the saved profile; on applies it again (with the usual 10-minute stability check).
 
@@ -88,7 +101,7 @@ Undervolting also has its own on/off switch (menu and Settings → Undervolting)
 * **Charts** menu: show or hide each chart, including **CPU Threads** (every logical CPU as a mini chart in one card), and reset the layout.
 * Charts sit in a two-column grid and are 1 or 2 cells wide and 1 or 2 cells tall: drag a chart to move it, drag its corner handle right/left and down/up to change its size (applied on release). The layout is remembered; the window scrolls if it doesn't fit the screen.
 
-**Settings → General → Menu Bar** customises the status item: the ⚡ icon can be monochrome, yellow or hidden; separators can be drawn between items; every value has a fixed width, so the item never jumps as numbers change; and every metric (CPU load, temperature, power, frequency, memory, swap, each fan) can be shown as a value, a mini graph (labelled on its left), both, or not at all.
+**Settings → Menu Bar** customises the status item: the ⚡ icon can be monochrome, yellow or hidden; separators can be drawn between items; every value has a fixed width, so the item never jumps as numbers change; and every metric (CPU load, temperature, power, frequency, memory, swap, each fan) can be shown as a value, a mini graph (labelled on its left), both, or not at all.
 
 ## Fan control
 

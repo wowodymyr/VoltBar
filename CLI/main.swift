@@ -18,6 +18,10 @@ func usage() -> Never {
       voltbarctl power <PL1> <PL2>            set power limits (W) temporarily
       voltbarctl fans                         fans, sensors and fan control state
       voltbarctl fans off                     hand all fans back to the system
+      voltbarctl profiles                     list profiles (made in the app)
+      voltbarctl profile <name>               apply a profile
+      voltbarctl gpu <integrated|dynamic|discrete>
+                                              switch graphics (dual-GPU MacBook Pros)
       voltbarctl save                         save current temporary settings as the profile
       voltbarctl reset                        restore factory values and disable the profile
       sudo voltbarctl read <0xMSR>            read an MSR
@@ -125,6 +129,28 @@ case "power":
     b.pl2 = p2
     let r = call(Request(cmd: "apply", settings: b))
     if let s = r.status { printInfo(s) }
+
+case "profiles":
+    let url = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/VoltBar/profiles.json")
+    guard let d = try? Data(contentsOf: url),
+          let list = (try? JSONSerialization.jsonObject(with: d)) as? [[String: Any]], !list.isEmpty else {
+        print("No profiles yet — create them in VoltBar → Settings → Profiles."); break
+    }
+    for p in list { print(p["name"] as? String ?? "?") }
+
+case "profile", "gpu":
+    guard rest.count >= 1 else { usage() }
+    let arg = rest.joined(separator: " ")
+    if cmd == "gpu", !["integrated", "dynamic", "discrete"].contains(arg) { usage() }
+    // Profiles and graphics switching live in the app (user session): hand over via the URL scheme.
+    let path = arg.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? arg
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+    p.arguments = ["-g", "voltbar://\(cmd)/\(path)"]
+    do { try p.run(); p.waitUntilExit() } catch { fputs("Couldn't reach VoltBar.app: \(error)\n", stderr); exit(2) }
+    if p.terminationStatus != 0 { fputs("Couldn't reach VoltBar.app (is it installed?)\n", stderr); exit(2) }
+    print("Sent to VoltBar: \(cmd) \(arg)")
 
 case "fans":
     if rest.first == "off" {
