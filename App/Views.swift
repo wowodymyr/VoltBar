@@ -47,6 +47,7 @@ struct HeaderView: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Image(systemName: "bolt.fill").foregroundColor(.yellow)
+                    .shadow(color: .black.opacity(0.35), radius: 0.8, x: 0, y: 0.5)
                 Text("VoltBar").font(.headline)
                 Spacer()
             }

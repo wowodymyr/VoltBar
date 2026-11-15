@@ -257,15 +257,29 @@ enum MenuBarRenderer {
                 let name = active ? "bolt.fill" : "bolt"
                 if let sym = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
                     .withSymbolConfiguration(.init(pointSize: 13, weight: .medium)) {
-                    let tint = config.icon == .yellow ? NSColor.systemYellow : fg
+                    let lightBar = NSAppearance.currentDrawing().bestMatch(from: [.aqua, .darkAqua]) != .darkAqua
+                    // On a light bar plain yellow washes out: use a deeper amber there.
+                    let yellow = lightBar ? NSColor(srgbRed: 0.98, green: 0.72, blue: 0.0, alpha: 1) : NSColor.systemYellow
+                    let tint = config.icon == .yellow ? yellow : fg
                     let tinted = NSImage(size: sym.size, flipped: false) { r in
                         sym.draw(in: r)
                         tint.set()
                         r.fill(using: .sourceAtop)
                         return true
                     }
+                    // A yellow bolt barely stands out on a light menu bar: give it a soft dark shadow
+                    // (stronger on light bars, faint on dark ones).
+                    NSGraphicsContext.saveGraphicsState()
+                    if config.icon == .yellow {
+                        let shadow = NSShadow()
+                        shadow.shadowColor = NSColor.black.withAlphaComponent(lightBar ? 0.85 : 0.35)
+                        shadow.shadowBlurRadius = lightBar ? 1.2 : 1.0
+                        shadow.shadowOffset = NSSize(width: 0, height: -0.5)
+                        shadow.set()
+                    }
                     tinted.draw(in: NSRect(x: (16 - sym.size.width) / 2, y: (height - sym.size.height) / 2,
                                            width: sym.size.width, height: sym.size.height))
+                    NSGraphicsContext.restoreGraphicsState()
                     if discreteDot {
                         // Discrete GPU active (like gSwitch's dot).
                         (config.icon == .yellow ? NSColor.systemOrange : fg).setFill()
