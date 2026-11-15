@@ -101,7 +101,7 @@ Undervolting also has its own on/off switch (menu and Settings → Undervolting)
 * **Charts** menu: show or hide each chart, including **CPU Threads** (every logical CPU as a mini chart in one card), and reset the layout.
 * Charts sit in a two-column grid and are 1 or 2 cells wide and 1 or 2 cells tall: drag a chart to move it, drag its corner handle right/left and down/up to change its size (applied on release). The layout is remembered; the window scrolls if it doesn't fit the screen.
 
-**Settings → Menu Bar** customises the status item: the ⚡ icon can be monochrome, yellow or hidden; separators can be drawn between items; every value has a fixed width, so the item never jumps as numbers change; and every metric (CPU load, temperature, power, frequency, memory, swap, each fan) can be shown as a value, a mini graph (labelled on its left), both, or not at all.
+**Settings → Menu Bar** chooses which sections the menu shows (metrics, profile, undervolting, fans, graphics, Monitor button — a hidden section keeps working) and customises the status item: the ⚡ icon can be monochrome, yellow or hidden; separators can be drawn between items; every value has a fixed width, so the item never jumps as numbers change; and every metric (CPU load, temperature, power, frequency, memory, swap, each fan) can be shown as a value, a mini graph (labelled on its left), both, or not at all.
 
 ## Fan control
 
@@ -118,7 +118,7 @@ Safety: speeds stay within each fan's own min…max from the SMC; above 95 °C C
 
 ## Protection against unstable undervolts
 
-1. After **Save** the profile is applied immediately but stays unconfirmed for 10 minutes (a countdown is shown in the menu). If the system freezes, panics or restarts during that time, the profile is **not applied** on the next boot and a warning appears in the menu.
+1. After **Save** the profile is applied immediately but stays unconfirmed for 10 minutes (offsets that already passed this check — or milder ones — don't need it again, so switching profiles doesn't restart it) (a countdown is shown in the menu). If the system freezes, panics or restarts during that time, the profile is **not applied** on the next boot and a warning appears in the menu.
 2. **Kernel panic after saving** (even later than 10 minutes): the daemon finds the `Kernel-*.panic` report in `/Library/Logs/DiagnosticReports` and disables the profile. Unstable undervolts often crash the system at idle rather than under load (a Machine Check in `machine_idle`).
 3. If the daemon starts 4 times in a row, each time running for less than 3 minutes (a boot loop), the profile is disabled as well.
 4. **Hang without a panic** (hard freeze, forced power-off): the daemon records every normal exit (SIGTERM on shutdown/restart). If the previous session ended without one while a profile with voltage offsets was active, the profile is disabled on the next boot.

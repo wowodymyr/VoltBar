@@ -56,6 +56,34 @@ struct FeatureFlags: Codable, Equatable {
     func save() { if let d = try? JSONEncoder().encode(self) { UserDefaults.standard.set(d, forKey: Self.defaultsKey) } }
 }
 
+/// Which sections the menu (popover) shows. Hiding one only hides it — the module keeps working.
+struct MenuSections: Codable, Equatable {
+    var metrics = true
+    var profile = true
+    var undervolting = true
+    var fans = true
+    var graphics = true
+    var monitorButton = true
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        metrics = try c.decodeIfPresent(Bool.self, forKey: .metrics) ?? true
+        profile = try c.decodeIfPresent(Bool.self, forKey: .profile) ?? true
+        undervolting = try c.decodeIfPresent(Bool.self, forKey: .undervolting) ?? true
+        fans = try c.decodeIfPresent(Bool.self, forKey: .fans) ?? true
+        graphics = try c.decodeIfPresent(Bool.self, forKey: .graphics) ?? true
+        monitorButton = try c.decodeIfPresent(Bool.self, forKey: .monitorButton) ?? true
+    }
+
+    static let key = "menuSections"
+    static func load() -> MenuSections {
+        guard let d = UserDefaults.standard.data(forKey: key), let m = try? JSONDecoder().decode(MenuSections.self, from: d) else { return MenuSections() }
+        return m
+    }
+    func save() { if let d = try? JSONEncoder().encode(self) { UserDefaults.standard.set(d, forKey: Self.key) } }
+}
+
 final class AppModel: ObservableObject {
     /// The app's single model — also reached by Shortcuts actions and voltbar:// URLs.
     static private(set) weak var shared: AppModel?
@@ -89,6 +117,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var launchAtLogin = false
 
     // Menu bar item: what to show next to the ⚡ icon.
+    @Published var menuSections = MenuSections.load() { didSet { if menuSections != oldValue { menuSections.save() } } }
+
     @Published var menuBarConfig = MenuBarConfig.load() {
         didSet { menuBarConfig.save(); updatePolling() }
     }
@@ -302,7 +332,11 @@ final class AppModel: ObservableObject {
         send(Request(cmd: "save", settings: draft)) { [weak self] r in
             guard let self = self else { return }
             if r.ok {
-                self.show("Saved and applied. If the system runs \(VB.confirmSeconds / 60) min without a crash, the profile will be applied at every boot.", error: false)
+                if (r.status?.pendingConfirmSeconds ?? 0) > 0 {
+                    self.show("Saved and applied. If the system runs \(VB.confirmSeconds / 60) min without a crash, the profile will be applied at every boot.", error: false)
+                } else {
+                    self.show("Saved and applied. These offsets already passed the stability check.", error: false)
+                }
             }
         }
     }
@@ -354,8 +388,10 @@ final class AppModel: ObservableObject {
     func setUndervolting(_ on: Bool) {
         send(Request(cmd: "undervolt", enabled: on)) { [weak self] r in
             guard let self = self, r.ok else { return }
-            self.show(on ? "Undervolting on. If the system runs \(VB.confirmSeconds / 60) min without a crash, the profile will be applied at every boot."
-                         : "Undervolting off — factory voltages. Your profile is kept.", error: false)
+            let checking = (r.status?.pendingConfirmSeconds ?? 0) > 0
+            self.show(!on ? "Undervolting off — factory voltages. Your profile is kept."
+                      : checking ? "Undervolting on. If the system runs \(VB.confirmSeconds / 60) min without a crash, the profile will be applied at every boot."
+                      : "Undervolting on (offsets already passed the stability check).", error: false)
         }
     }
 

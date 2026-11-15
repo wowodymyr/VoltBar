@@ -355,15 +355,15 @@ struct CompactMenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HeaderView()
-            if model.connected { MetricsView(live: model.live) }
+            if model.connected && model.menuSections.metrics { MetricsView(live: model.live) }
             Divider()
-            if model.connected {
+            if model.connected && model.menuSections.profile {
                 ProfilesMenuSection(store: model.profiles, openSettings: { openSettings(.profiles) })
                 Divider()
             }
 
             // Undervolting
-            if model.features.undervolting {
+            if model.features.undervolting && model.menuSections.undervolting {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Label("Undervolting", systemImage: "bolt").font(.headline)
@@ -393,12 +393,12 @@ struct CompactMenuView: View {
             }
 
             // Fans
-            if model.connected && model.features.fans {
+            if model.connected && model.features.fans && model.menuSections.fans {
                 FansMenuSection(live: model.live, openFanSettings: { openSettings(.fans) })
                 Divider()
             }
 
-            if model.features.gpu && model.gpu.available {
+            if model.features.gpu && model.gpu.available && model.menuSections.graphics {
                 GPUMenuSection(gpu: model.gpu, openSettings: { openSettings(.gpu) })
                 Divider()
             }
@@ -413,7 +413,7 @@ struct CompactMenuView: View {
             HStack {
                 Button("Settings…") { openSettings(model.features.undervolting ? .undervolting : (model.features.fans ? .fans : .general)) }
                     .keyboardShortcut(",", modifiers: .command)
-                if model.features.monitoring {
+                if model.features.monitoring && model.menuSections.monitorButton {
                     Button("Monitor…") { openMonitor() }
                         .keyboardShortcut("m", modifiers: [.command, .option])
                         .help("Live charts of CPU, memory, swap and fans")
@@ -507,50 +507,105 @@ struct UndervoltSettingsView: View {
     }
 }
 
+/// Big icon + title + description: the header every Settings tab starts with.
+struct TabHeader: View {
+    let symbol: String
+    let title: String
+    let description: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol).font(.system(size: 28)).frame(width: 36)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline)
+                Text(description).font(.callout).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
 struct GeneralSettingsView: View {
     @EnvironmentObject var model: AppModel
 
+    private var appVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—" }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HeaderView()
-            Divider()
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Features").font(.headline)
-                FeatureToggle(symbol: "bolt", title: "Undervolting",
-                              detail: "Voltage offsets, Turbo Boost and power limits. Off: factory settings.",
-                              isOn: $model.features.undervolting)
-                FeatureToggle(symbol: fanSymbolName, title: "Fan Control",
-                              detail: "Custom fan modes. Off: macOS controls the fans.",
-                              isOn: $model.features.fans)
-                if model.gpu.available {
-                    FeatureToggle(symbol: gpuSymbolName, title: "Graphics Switching",
-                                  detail: "Integrated / dynamic / discrete GPU. Off: macOS decides (dynamic).",
-                                  isOn: $model.features.gpu)
+        VStack(alignment: .leading, spacing: 16) {
+            TabHeader(symbol: "gearshape", title: "General",
+                      description: "Choose which parts of VoltBar are in use. A module that's off disappears from the menu and Settings and does nothing in the background.")
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Features").font(.headline)
+                    FeatureToggle(symbol: "bolt", title: "Undervolting",
+                                  detail: "Voltage offsets, Turbo Boost and power limits. Off: factory settings.",
+                                  isOn: $model.features.undervolting)
+                    Divider()
+                    FeatureToggle(symbol: fanSymbolName, title: "Fan Control",
+                                  detail: "Custom fan modes. Off: macOS controls the fans.",
+                                  isOn: $model.features.fans)
+                    if model.gpu.available {
+                        Divider()
+                        FeatureToggle(symbol: gpuSymbolName, title: "Graphics Switching",
+                                      detail: "Integrated / dynamic / discrete GPU. Off: macOS decides (dynamic).",
+                                      isOn: $model.features.gpu)
+                    }
+                    Divider()
+                    FeatureToggle(symbol: "powerplug", title: "Automatic Profile Switching",
+                                  detail: "Apply profiles when the power adapter is connected or disconnected.",
+                                  isOn: $model.features.autoProfiles)
+                    Divider()
+                    FeatureToggle(symbol: "chart.xyaxis.line", title: "Monitoring",
+                                  detail: "Monitor window and live values in the menu bar. Off: nothing is sampled.",
+                                  isOn: $model.features.monitoring)
                 }
-                FeatureToggle(symbol: "powerplug", title: "Automatic Profile Switching",
-                              detail: "Apply profiles when the power adapter is connected or disconnected (Settings → Profiles).",
-                              isOn: $model.features.autoProfiles)
-                FeatureToggle(symbol: "chart.xyaxis.line", title: "Monitoring",
-                              detail: "Monitor window and live values in the menu bar. Off: nothing is sampled.",
-                              isOn: $model.features.monitoring)
+                .padding(6)
             }
-            Divider()
-            Toggle("Launch VoltBar at login", isOn: Binding(get: { model.launchAtLogin },
-                                                            set: { model.setLaunchAtLogin($0) }))
-                .toggleStyle(.checkbox)
-            Divider()
-            VStack(alignment: .leading, spacing: 4) {
-                Text("About").font(.headline)
-                Text("VoltBar \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")"
-                     + (model.status.map { " · daemon \($0.daemonVersion)" } ?? "")).font(.callout)
-                if let d = model.status?.driver {
-                    Text("MSR driver: \(d == VB.ownKextClass ? "VoltBarMSR (built-in)" : d)").font(.callout)
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Startup").font(.headline)
+                    Toggle("Launch VoltBar at login", isOn: Binding(get: { model.launchAtLogin },
+                                                                    set: { model.setLaunchAtLogin($0) }))
+                        .toggleStyle(.checkbox)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(6)
+            }
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("About").font(.headline)
+                    AboutRow(label: "Version", value: "VoltBar \(appVersion)" + (model.status.map { " · daemon \($0.daemonVersion)" } ?? ""))
+                    if !model.cpuModel.isEmpty { AboutRow(label: "Processor", value: model.cpuModel) }
+                    if !model.macModel.isEmpty { AboutRow(label: "Mac", value: model.macModel) }
+                    if let d = model.status?.driver {
+                        AboutRow(label: "MSR driver", value: d == VB.ownKextClass ? "VoltBarMSR (built-in)" : d)
+                    }
+                    HStack {
+                        Text("Project").font(.callout).frame(width: 90, alignment: .leading)
+                        Link("github.com/wowodymyr/VoltBar", destination: URL(string: "https://github.com/wowodymyr/VoltBar")!)
+                            .font(.callout)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(6)
             }
         }
         .padding(20)
-        .frame(width: 480, alignment: .leading)
+        .frame(width: 520, alignment: .leading)
         .fixedSize()
+    }
+}
+
+private struct AboutRow: View {
+    let label: String
+    let value: String
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label).font(.callout).frame(width: 90, alignment: .leading)
+            Text(value).font(.callout).textSelection(.enabled)
+        }
     }
 }
 
@@ -578,20 +633,58 @@ struct MenuBarSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "menubar.rectangle").font(.system(size: 28)).frame(width: 36)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Menu Bar").font(.headline)
-                    Text("What the VoltBar item shows next to (or instead of) the ⚡ icon. Values keep a fixed width so the item doesn't jump.")
-                        .font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
+            TabHeader(symbol: "menubar.rectangle", title: "Menu Bar",
+                      description: "What the VoltBar item in the menu bar shows, and which sections its menu contains.")
+            GroupBox {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Menu Bar Item").font(.headline)
+                    MenuBarSettings(live: model.live)
                 }
+                .padding(6)
             }
-            MenuBarSettings(live: model.live)
+            GroupBox {
+                MenuSectionsSettings()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(6)
+            }
         }
         .padding(20)
-        .frame(width: 480, alignment: .leading)
+        .frame(width: 520, alignment: .leading)
         .fixedSize()
+    }
+}
+
+/// Which sections the menu shows.
+struct MenuSectionsSettings: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Menu").font(.headline)
+            Text("Sections shown when you click the menu bar item. A hidden section keeps working — it's just not in the menu.")
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 24) {
+                VStack(alignment: .leading, spacing: 6) {
+                    toggle("Temperature, frequency, power", \.metrics, enabled: true)
+                    toggle("Profile", \.profile, enabled: true)
+                    toggle("Undervolting", \.undervolting, enabled: model.features.undervolting)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    toggle("Fans", \.fans, enabled: model.features.fans)
+                    if model.gpu.available { toggle("Graphics", \.graphics, enabled: model.features.gpu) }
+                    toggle("Monitor… button", \.monitorButton, enabled: model.features.monitoring)
+                }
+            }
+            .toggleStyle(.checkbox)
+        }
+    }
+
+    private func toggle(_ title: String, _ key: WritableKeyPath<MenuSections, Bool>, enabled: Bool) -> some View {
+        Toggle(title, isOn: Binding(get: { model.menuSections[keyPath: key] },
+                                    set: { model.menuSections[keyPath: key] = $0 }))
+            .disabled(!enabled)
+            .help(enabled ? "" : "This module is turned off in General")
     }
 }
 

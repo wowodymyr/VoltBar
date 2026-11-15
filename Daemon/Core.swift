@@ -11,7 +11,7 @@ import Foundation
 import IOKit
 import IOKit.pwr_mgt
 
-let daemonVersion = "2.2"
+let daemonVersion = "2.3"
 
 // MARK: - Хранилище
 
@@ -37,6 +37,11 @@ struct DaemonState: Codable {
     var factoryTjOffset: Int? = nil
     var factoryBDProchot: Bool? = nil
     var cleanExit: Bool? = nil          // false while running; true after SIGTERM (normal shutdown/restart)
+    /// Offset sets (6 planes, mV) that survived the stability check. A set that's the same or milder on
+    /// every plane doesn't need the 10-minute check again — switching profiles shouldn't restart it.
+    var confirmedOffsets: [[Int]]? = nil
+    /// Offsets under the running stability check (the ones that get confirmed when it finishes).
+    var pendingOffsets: [Int]? = nil
 }
 
 /// Newest kernel panic report written by macOS (mtime, epoch), if any.
@@ -145,6 +150,7 @@ final class Core {
         // 2) Много быстрых перезапусков подряд => безопасный режим.
         state.quickStarts += 1
         if state.quickStarts >= 4 && config.enabled {
+            markUnstable(config.settings?.offsets)
             config.enabled = false
             state.message = "Profile disabled: \(state.quickStarts) quick restarts in a row. Check the values and save again."
             vlog(state.message!)
@@ -153,11 +159,16 @@ final class Core {
         //    idle leaves no panic report, so this is the only trace of an unstable undervolt.
         if newBoot, state.cleanExit == false, config.enabled,
            let s = config.settings, s.offsets.contains(where: { $0 != 0 }) {
+            markUnstable(s.offsets)
             config.enabled = false
             state.pendingUntil = nil
             state.pendingBoot = nil
             state.message = "Profile disabled: the previous session ended without a normal shutdown (system hang or forced power-off). Use smaller offsets and save again."
             vlog(state.message!)
+        }
+        if state.confirmedOffsets == nil {
+            state.confirmedOffsets = []
+            if config.enabled, state.pendingUntil == nil, let s = config.settings { markConfirmed(s.offsets) }
         }
         state.cleanExit = false
         state.lastStartBoot = currentBoot
@@ -176,6 +187,7 @@ final class Core {
         guard config.enabled || override != nil else { persist(); return false }
         if let saved = state.profileSavedAt, p.date < saved { persist(); return false }
         let what = panicSummary(p.path)
+        markUnstable((override ?? config.settings)?.offsets)
         override = nil
         config.enabled = false
         state.pendingUntil = nil
@@ -406,6 +418,58 @@ final class Core {
         return errors
     }
 
+    // MARK: Known-stable offsets
+
+    /// True when every plane is at least as mild as in some offset set that already passed the check.
+    func isConfirmed(_ offsets: [Int]) -> Bool {
+        if offsets.allSatisfy({ $0 >= 0 }) { return true }            // no undervolt at all
+        return (state.confirmedOffsets ?? []).contains { c in
+            c.count == offsets.count && zip(offsets, c).allSatisfy { $0 >= $1 }
+        }
+    }
+
+    func markConfirmed(_ offsets: [Int]) {
+        guard !offsets.allSatisfy({ $0 >= 0 }) else { return }
+        guard !isConfirmed(offsets) else { return }
+        var list = state.confirmedOffsets ?? []
+        // Drop sets the new one covers (it's at least as aggressive on every plane).
+        list.removeAll { c in c.count == offsets.count && zip(c, offsets).allSatisfy { $0 >= $1 } }
+        list.append(offsets)
+        state.confirmedOffsets = Array(list.suffix(20))
+    }
+
+    /// A crash or hang with `offsets` active: forget it and every set at least as aggressive.
+    func markUnstable(_ offsets: [Int]?) {
+        guard let o = offsets, var list = state.confirmedOffsets else { return }
+        list.removeAll { c in c.count == o.count && zip(c, o).allSatisfy { $0 <= $1 } }
+        state.confirmedOffsets = list
+    }
+
+    /// Starts the stability check for newly applied settings — unless their offsets are already known-stable.
+    func startProbation(for s: VBSettings) -> Bool {
+        state.profileSavedAt = Date().timeIntervalSince1970
+        state.handledPanicAt = newestPanicReport()?.date ?? state.handledPanicAt
+        if isConfirmed(s.offsets) {
+            state.pendingUntil = nil
+            state.pendingBoot = nil
+            state.pendingOffsets = nil
+            confirmGeneration += 1
+            return false
+        }
+        // A check is already running for the same or deeper offsets (e.g. switching between profiles
+        // that share them): let it carry on instead of starting the 10 minutes over.
+        if let until = state.pendingUntil, until > Date().timeIntervalSince1970, sameBoot(state.pendingBoot ?? 0, currentBoot),
+           let tested = state.pendingOffsets, tested.count == s.offsets.count,
+           zip(s.offsets, tested).allSatisfy({ $0 >= $1 }) {
+            return true
+        }
+        state.pendingUntil = Date().timeIntervalSince1970 + Double(VB.confirmSeconds)
+        state.pendingBoot = currentBoot
+        state.pendingOffsets = s.offsets
+        scheduleConfirm(after: Double(VB.confirmSeconds))
+        return true
+    }
+
     func scheduleConfirm(after seconds: Double) {
         confirmGeneration += 1
         let gen = confirmGeneration
@@ -413,6 +477,8 @@ final class Core {
             guard gen == confirmGeneration, state.pendingUntil != nil else { return }
             state.pendingUntil = nil
             state.pendingBoot = nil
+            if let tested = state.pendingOffsets ?? config.settings?.offsets { markConfirmed(tested) }
+            state.pendingOffsets = nil
             persist()
             vlog("Profile confirmed (system stable for \(VB.confirmSeconds / 60) min)")
         }
@@ -506,13 +572,9 @@ final class Core {
             config.settings = s
             config.enabled = true
             state.message = nil
-            state.pendingUntil = Date().timeIntervalSince1970 + Double(VB.confirmSeconds)
-            state.pendingBoot = currentBoot
-            state.profileSavedAt = Date().timeIntervalSince1970
-            state.handledPanicAt = newestPanicReport()?.date ?? state.handledPanicAt
+            let checking = startProbation(for: s)
             persist()
-            scheduleConfirm(after: Double(VB.confirmSeconds))
-            vlog("Profile saved (uid \(uid)): \(s.offsets) turbo=\(s.manageTurbo ? "\(s.turbo)" : "-") power=\(s.managePower ? "\(s.pl1)/\(s.pl2)" : "-")")
+            vlog("Profile saved (uid \(uid))" + (checking ? "" : " — offsets already known-stable, no stability check") + ": \(s.offsets) turbo=\(s.manageTurbo ? "\(s.turbo)" : "-") power=\(s.managePower ? "\(s.pl1)/\(s.pl2)" : "-")")
             return Response(ok: true, status: status())
 
         case "undervolt":
@@ -530,13 +592,9 @@ final class Core {
                 override = nil
                 config.enabled = true
                 state.message = nil
-                state.pendingUntil = Date().timeIntervalSince1970 + Double(VB.confirmSeconds)
-                state.pendingBoot = currentBoot
-                state.profileSavedAt = Date().timeIntervalSince1970
-                state.handledPanicAt = newestPanicReport()?.date ?? state.handledPanicAt
+                let checking = startProbation(for: s)
                 persist()
-                scheduleConfirm(after: Double(VB.confirmSeconds))
-                vlog("Undervolting on (uid \(uid))")
+                vlog("Undervolting on (uid \(uid))" + (checking ? "" : " — known-stable offsets, no stability check"))
             } else {
                 var errs: [String] = []
                 if kextReady || hw.dev.open() { kextReady = true; errs = resetHardware() }
