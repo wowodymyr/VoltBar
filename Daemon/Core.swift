@@ -11,7 +11,7 @@ import Foundation
 import IOKit
 import IOKit.pwr_mgt
 
-let daemonVersion = "2.0"
+let daemonVersion = "2.0.1"
 
 // MARK: - Хранилище
 
@@ -119,6 +119,8 @@ final class Core {
     var lastKextLoadAttempt: TimeInterval = -1000
     var confirmGeneration = 0
     var timers: [DispatchSourceTimer] = []
+    /// Package power, W — sampled once a second by the fan/metrics timer.
+    var packagePower: Double? = nil
 
     init() {
         try? FileManager.default.createDirectory(atPath: VB.supportDir, withIntermediateDirectories: true,
@@ -224,7 +226,13 @@ final class Core {
         fans.config = config.fans ?? FanConfig()
         let ft = DispatchSource.makeTimerSource(queue: q)
         ft.schedule(deadline: .now() + 1, repeating: 1, leeway: .milliseconds(200))
-        ft.setEventHandler { [self] in fans.tick() }
+        ft.setEventHandler { [self] in
+            fans.tick()
+            // Package power is the energy-counter delta between two reads. Sample it here, once a second,
+            // and serve the cached value: computing it per status request broke as soon as two clients
+            // (app + CLI, app + Monitor) asked less than 0.2 s apart.
+            if kextReady { packagePower = hw.packageWatts() ?? packagePower }
+        }
         ft.resume()
         timers.append(ft)
     }
@@ -467,7 +475,7 @@ final class Core {
         }
         st.tempC = try? hw.temperature()
         st.freqGHz = try? hw.frequencyGHz()
-        st.packageW = hw.packageWatts()
+        st.packageW = packagePower
         return st
     }
 
